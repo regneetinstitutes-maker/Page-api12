@@ -1,0 +1,162 @@
+I want to audit the current backend project before continuing development.
+
+Please analyze the entire backend project and give me a detailed implementation status report. Do not explain the code in general—only tell me what is actually implemented and what is still missing.
+
+Organize your response using the following sections exactly:
+
+1. Project Structure
+
+- Folder structure
+- Main technologies
+- Framework
+- Database
+- ORM
+- Authentication system
+- Environment configuration
+
+2. Database
+
+List every existing model/table with:
+
+- Purpose
+- Fields
+- Relationships
+- Current implementation status
+
+3. Authentication
+
+Explain what is already implemented:
+
+- User authentication
+- Admin authentication
+- Host authentication
+- JWT/session
+- Refresh tokens
+- Password hashing
+- OTP
+- Authorization middleware
+
+4. APIs
+
+List every existing API grouped by module.
+For each API include:
+
+- Method
+- Route
+- Purpose
+- Current status
+- Complete / Partial / Placeholder
+
+5. Business Logic
+
+Explain what business logic is already implemented.
+
+Examples:
+
+- Wallet
+- Coins
+- Transactions
+- OMB logic
+- Tournament logic
+- Auto match creation
+- Auto tournament creation
+- Prize distribution
+- Auto reward
+- Notifications
+- Join flow
+- My Play
+- Payment handling
+- Host assignment
+
+Clearly mark each as:
+
+- Implemented
+- Partial
+- Not Started
+
+6. Admin Support
+
+What backend APIs/features already exist for:
+
+- Dashboard
+- Games
+- Modes
+- Entry Fees
+- Schedules
+- User Search
+- Match/Tournament Search
+- Host Management
+
+7. Hosts Support
+
+What backend APIs/features already exist for:
+
+- Claim Match
+- Claim Tournament
+- Running Matches
+- Running Tournaments
+- Room Details
+- Result Submission
+- Initial/Final Value Submission
+- Competitors Position Updates
+- Release Match/Tournament
+
+8. Payments
+
+Current PayU integration status:
+
+- What's implemented
+- What's missing
+
+9. Security
+
+List implemented security features:
+
+- Validation
+- Rate limiting
+- Logging
+- Error handling
+- Input sanitization
+- Security middleware
+
+10. AWS Readiness
+
+Is the backend ready for EC2 deployment?
+What is missing before production?
+
+11. Overall Progress
+
+Estimate completion percentage for each module:
+
+- Core Backend
+- Database
+- Authentication
+- Wallet
+- OMB System
+- Tournament System
+- Admin APIs
+- Host APIs
+- Notifications
+- Payments
+- Deployment
+
+12. Remaining Work
+
+Create a prioritized checklist.
+
+Group into:
+
+Critical
+Important
+Optional
+
+Only include work that is actually not implemented.
+
+Very important:
+
+- Do NOT suggest new features.
+- Do NOT redesign the architecture.
+- Do NOT propose improvements.
+- Report only the current implementation status based on the existing codebase.
+- If something exists but is incomplete, explicitly mark it as Partial.
+- If something does not exist, explicitly mark it as Not Started.

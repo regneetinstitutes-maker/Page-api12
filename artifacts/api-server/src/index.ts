@@ -1,0 +1,110 @@
+import app from "./app";
+import { logger } from "./lib/logger";
+import { startScheduler } from "./lib/scheduler";
+
+// ── PORT ──────────────────────────────────────────────────────────────────────
+
+const rawPort = process.env["PORT"];
+
+if (!rawPort) {
+  throw new Error("PORT environment variable is required but was not provided.");
+}
+
+const port = Number(rawPort);
+
+if (Number.isNaN(port) || port <= 0) {
+  throw new Error(`Invalid PORT value: "${rawPort}"`);
+}
+
+// ── PayU deposit startup validation ──────────────────────────────────────────
+// All required PayU variables are checked before the server begins accepting
+// requests.  Only variable *names* are ever passed to the logger — secret
+// values (PAYU_KEY, PAYU_SALT) are never read or printed here.
+
+const PAYU_REQUIRED = ["PAYU_KEY", "PAYU_SALT", "PAYU_SURL", "PAYU_FURL"] as const;
+
+for (const varName of PAYU_REQUIRED) {
+  if (!process.env[varName]) {
+    logger.fatal(
+      "PayU configuration invalid.\n" +
+        `Missing environment variable: ${varName}\n` +
+        "Server startup aborted.",
+    );
+    process.exit(1);
+  }
+}
+
+// PAYU_ENV is optional but, when present, must be one of the two known values.
+// Its value is not a secret — logging it on misconfiguration is safe.
+const payuEnv = process.env["PAYU_ENV"] ?? "test";
+if (payuEnv !== "test" && payuEnv !== "production") {
+  logger.fatal(
+    "PayU configuration invalid.\n" +
+      `PAYU_ENV must be "test" or "production", got "${payuEnv}".\n` +
+      "Server startup aborted.",
+  );
+  process.exit(1);
+}
+
+// ── PayU Payout startup validation ────────────────────────────────────────────
+// PAYU_PAYOUT_KEY and PAYU_PAYOUT_SALT are separate credentials used by the
+// PayU Transfer Money (Payouts) API. Required when PAYOUT_PROVIDER=payu
+// (the default). Only variable names are logged — secret values are never read
+// or printed here.
+
+const payoutProvider = process.env["PAYOUT_PROVIDER"] ?? "payu";
+
+if (payoutProvider === "payu") {
+  const PAYU_PAYOUT_REQUIRED = ["PAYU_PAYOUT_KEY", "PAYU_PAYOUT_SALT"] as const;
+  for (const varName of PAYU_PAYOUT_REQUIRED) {
+    if (!process.env[varName]) {
+      logger.fatal(
+        "PayU Payout configuration invalid.\n" +
+          `Missing environment variable: ${varName}\n` +
+          "Server startup aborted.",
+      );
+      process.exit(1);
+    }
+  }
+
+  const payuPayoutEnv = process.env["PAYU_PAYOUT_ENV"] ?? "test";
+  if (payuPayoutEnv !== "test" && payuPayoutEnv !== "production") {
+    logger.fatal(
+      "PayU Payout configuration invalid.\n" +
+        `PAYU_PAYOUT_ENV must be "test" or "production", got "${payuPayoutEnv}".\n` +
+        "Server startup aborted.",
+    );
+    process.exit(1);
+  }
+}
+
+// ── Graceful shutdown ─────────────────────────────────────────────────────────
+// Signal handlers are registered before listen() so they are in place even
+// if startup validation fails (though that exits immediately anyway).
+
+let schedulerHandles: { stop(): void } | null = null;
+
+function gracefulShutdown(signal: string) {
+  logger.info({ signal }, "Server shutting down gracefully.");
+  schedulerHandles?.stop();
+  // Allow in-flight requests a brief moment to complete before exiting.
+  setTimeout(() => process.exit(0), 200).unref();
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+
+app.listen(port, (err) => {
+  if (err) {
+    logger.error({ err }, "Error listening on port");
+    process.exit(1);
+  }
+
+  logger.info({ port }, "Server listening");
+
+  // Start withdrawal background jobs now that the server is accepting requests.
+  // startScheduler() is a no-op when NODE_ENV === 'test'.
+  schedulerHandles = startScheduler();
+});

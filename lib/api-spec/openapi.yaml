@@ -1,0 +1,1535 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Authentication operations
+  - name: users
+    description: User profile operations
+  - name: wallet
+    description: Wallet & coin operations
+  - name: deposits
+    description: Deposit operations
+  - name: payout-accounts
+    description: Payout account (bank transfer & UPI) operations
+  - name: withdrawals
+    description: Withdrawal operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /auth/signup:
+    post:
+      operationId: signup
+      tags: [auth]
+      summary: Create a new user account
+      description: >
+        Creates a user account with name, username, age, and password, then
+        starts a new server-side session for the account (auto-login).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignupInput"
+      responses:
+        "201":
+          description: Account created and session started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Username already taken
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Authenticate with username and password
+      description: >
+        Verifies credentials, invalidates any previous active session for
+        the account, and starts a new session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Invalid username or password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: End the current session
+      description: Deletes the current server-side session, if any.
+      security:
+        - sessionCookie: []
+      responses:
+        "204":
+          description: Session ended
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /users/me:
+    get:
+      operationId: getCurrentUser
+      tags: [users]
+      summary: Get the authenticated user's profile
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet/balance:
+    get:
+      operationId: getWalletBalance
+      tags: [wallet]
+      summary: Get the authenticated user's wallet balances
+      description: >
+        Returns the current Play Coins and Winning Coins balances for the
+        authenticated user.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Wallet balances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletBalance"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet/transactions:
+    get:
+      operationId: getWalletTransactions
+      tags: [wallet]
+      summary: Get the authenticated user's wallet transaction history
+      description: >
+        Returns a page of the ledger for one of the user's wallets, newest
+        first.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: walletType
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/WalletType"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: before
+          in: query
+          required: false
+          description: Return only transactions created before this timestamp.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: A page of wallet transactions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetWalletTransactionsResult"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /deposits/initiate:
+    post:
+      operationId: initiateDeposit
+      tags: [deposits]
+      summary: Initiate a deposit
+      description: >
+        Creates a pending deposit record and returns the parameters the
+        frontend must POST to PayU to continue the payment flow. The
+        deposit remains in `pending` status until a PayU webhook confirms
+        the outcome.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DepositInitiateInput"
+      responses:
+        "201":
+          description: Deposit initiated — PayU form parameters ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DepositInitiateResult"
+        "400":
+          description: Validation error (e.g. invalid package amount)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /deposits/history:
+    get:
+      operationId: getDepositHistory
+      tags: [deposits]
+      summary: Get the authenticated user's deposit history
+      description: >
+        Returns a page of the authenticated user's deposits, newest first.
+        Supports cursor-based pagination via the `before` timestamp.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: before
+          in: query
+          required: false
+          description: Return only deposits created before this timestamp.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: A page of deposits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetDepositHistoryResult"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /deposits/{id}:
+    get:
+      operationId: getDeposit
+      tags: [deposits]
+      summary: Get a single deposit by ID
+      description: >
+        Returns a deposit belonging to the authenticated user.
+        Returns 404 if the deposit does not exist or belongs to a
+        different user.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deposit found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deposit"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Deposit not found or does not belong to the authenticated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /wallet/convert:
+    post:
+      operationId: convertWinningToPlay
+      tags: [wallet]
+      summary: Convert Winning Coins into Play Coins
+      description: >
+        Atomically debits the given amount from the user's Winning Coins
+        wallet and credits it to their Play Coins wallet. Safe to retry
+        with the same idempotencyKey without double-applying.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConvertWinningToPlayInput"
+      responses:
+        "200":
+          description: Conversion applied, resulting balances returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletBalance"
+        "400":
+          description: Validation error or insufficient Winning Coins balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /users/me/mobile:
+    post:
+      operationId: submitMobileNumber
+      tags: [users]
+      summary: Submit mobile number for verification
+      description: >
+        Records the user's Indian mobile number in E.164 format and transitions
+        mobileVerificationStatus from not_started to pending. Idempotent if the
+        same number is resubmitted while status is pending. Returns an error if
+        the number is already verified or belongs to another account.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitMobileNumberInput"
+      responses:
+        "200":
+          description: Mobile number recorded, verification pending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Validation error or invalid format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Mobile number already taken by another account or already verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /users/me/mobile/verify:
+    post:
+      operationId: verifyMobileNumber
+      tags: [users]
+      summary: Verify mobile number using a phone authentication token
+      description: >
+        Verifies the user's mobile number by validating a phone authentication
+        token. Currently uses a stub implementation; will use Firebase Admin SDK
+        after deployment. On success, sets mobileVerificationStatus to verified
+        and records mobileVerifiedAt. The phone number extracted from the token
+        must match the number previously submitted via POST /users/me/mobile.
+        Idempotent if the number is already verified.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyMobileNumberInput"
+      responses:
+        "200":
+          description: Mobile number verified (or was already verified)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Token invalid, phone number mismatch, or mobile not in pending state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /users/me/email:
+    patch:
+      operationId: updateEmail
+      tags: [users]
+      summary: Set or update email address
+      description: >
+        Stores the user's email address, normalized to lowercase. Idempotent if
+        the identical address is submitted again. Allows correcting a typo before
+        the first deposit. Returns an error if the address is already registered
+        to another account.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEmailInput"
+      responses:
+        "200":
+          description: Email address saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Validation error or invalid format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email address already registered to another account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /users/me/terms:
+    post:
+      operationId: acceptTerms
+      tags: [users]
+      summary: Accept Terms & Conditions
+      description: >
+        Records the timestamp at which the user accepted the Terms & Conditions.
+        Idempotent — subsequent calls return 200 without overwriting the original
+        acceptance timestamp. Required before a deposit or withdrawal can be
+        initiated.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Terms accepted (or were already accepted)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /bank-accounts:
+    post:
+      operationId: addPayoutAccount
+      tags: [payout-accounts]
+      summary: Save a payout account (bank transfer or UPI)
+      description: >
+        Saves a pre-registered payout account for the authenticated user.
+        The `method` field is the discriminator:
+          - `bank_transfer` — requires accountHolderName, bankAccountNumber, bankIfscCode;
+            bankName is optional.
+          - `upi` — requires accountHolderName and upiId (UPI Virtual Payment Address).
+        The upiId may have been entered manually or extracted from a QR code by the
+        client; the backend treats both identically. Account numbers are never returned
+        in full — only the last 4 digits are exposed (masked).
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddPayoutAccountInput"
+      responses:
+        "201":
+          description: Payout account saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayoutAccount"
+        "400":
+          description: Validation error (missing fields, invalid IFSC, invalid UPI VPA)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      operationId: getPayoutAccounts
+      tags: [payout-accounts]
+      summary: List all saved payout accounts for the authenticated user
+      description: >
+        Returns all non-deleted payout accounts (bank transfer and UPI) for the
+        authenticated user, ordered by creation date (oldest first).
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: List of payout accounts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetPayoutAccountsResult"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /bank-accounts/{id}:
+    get:
+      operationId: getPayoutAccount
+      tags: [payout-accounts]
+      summary: Get a single payout account by ID
+      description: >
+        Returns a single non-deleted payout account belonging to the authenticated user.
+        Returns 404 if not found or if it belongs to a different user.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Payout account found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayoutAccount"
+        "400":
+          description: Invalid UUID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found or does not belong to this user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deletePayoutAccount
+      tags: [payout-accounts]
+      summary: Soft-delete a payout account
+      description: >
+        Soft-deletes a payout account, hiding it from the user's active list.
+        Physical deletion is blocked by the database (the FK from withdrawals is
+        RESTRICT). Fails with 409 if the account is referenced by a currently
+        reserved or processing withdrawal — wait for the withdrawal to settle first.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Payout account soft-deleted
+        "400":
+          description: Invalid UUID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found or does not belong to this user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Account is referenced by an active withdrawal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /withdrawals:
+    post:
+      operationId: initiateWithdrawal
+      tags: [withdrawals]
+      summary: Initiate a withdrawal
+      description: >
+        Creates a withdrawal request that locks the requested Winning Coins and
+        schedules them for payout to the specified payout account (bank transfer
+        or UPI). Requires a verified mobile number and accepted Terms & Conditions.
+
+
+        Only one active withdrawal (reserved or processing) is permitted per user at a time.
+
+
+        Idempotent on the idempotencyKey field — retrying with the same key and
+        same parameters returns the existing withdrawal (200) rather than creating
+        a duplicate.
+
+
+        Rate limited: 10 requests per 60 seconds per user.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitiateWithdrawalInput"
+      responses:
+        "201":
+          description: Withdrawal created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Withdrawal"
+        "200":
+          description: Idempotent return — same key and params, existing withdrawal returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Withdrawal"
+        "400":
+          description: >
+            Validation error, amount below minimum, mobile not verified,
+            or Terms & Conditions not accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Payout account not found or does not belong to this user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Active withdrawal already exists, or conflicting idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Insufficient Winning Coins balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      operationId: getWithdrawals
+      tags: [withdrawals]
+      summary: List the authenticated user's withdrawals
+      description: Returns a paginated list of withdrawals, newest first.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: before
+          in: query
+          required: false
+          description: Return only withdrawals created before this timestamp.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: A page of withdrawals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetWithdrawalsResult"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /withdrawals/{id}:
+    get:
+      operationId: getWithdrawal
+      tags: [withdrawals]
+      summary: Get a single withdrawal by ID
+      description: >
+        Returns a withdrawal belonging to the authenticated user.
+        Returns 404 (not 403) if the withdrawal belongs to a different user to
+        avoid revealing whether a withdrawal ID exists.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Withdrawal found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Withdrawal"
+        "400":
+          description: Invalid UUID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found or does not belong to this user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /withdrawals/{id}/cancel:
+    post:
+      operationId: cancelWithdrawal
+      tags: [withdrawals]
+      summary: Cancel a withdrawal
+      description: >
+        Cancels a withdrawal and releases the locked Winning Coins back to the
+        user's available balance. Only valid while the withdrawal is in the
+        `reserved` state (before submission to the payout provider). Idempotent
+        if already cancelled.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Withdrawal cancelled (or was already cancelled)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Withdrawal"
+        "400":
+          description: Invalid UUID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found or does not belong to this user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Withdrawal is not in `reserved` state and cannot be cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: sid
+      description: Opaque server-side session token issued on signup/login.
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    User:
+      type: object
+      description: A user account, excluding all credential/session material.
+      required: [id, username, name, age, accountStatus, createdAt, mobileVerificationStatus]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        name:
+          type: string
+        age:
+          type: integer
+        email:
+          type: string
+          format: email
+          nullable: true
+          description: >
+            Collected during the user's first deposit flow, not at signup.
+            Null until the user provides it. Required before a deposit can
+            be initiated.
+        accountStatus:
+          type: string
+          enum: [active, suspended, deactivated]
+        createdAt:
+          type: string
+          format: date-time
+        mobileNumber:
+          type: string
+          nullable: true
+          description: >
+            The user's registered mobile number in E.164 format (+91XXXXXXXXXX).
+            Null until submitted. Required and verified before a deposit or
+            withdrawal can be initiated.
+        mobileVerificationStatus:
+          $ref: "#/components/schemas/MobileVerificationStatus"
+        termsAcceptedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Timestamp when the user accepted the Terms & Conditions. Null until
+            accepted. Required before a deposit or withdrawal can be initiated.
+    SignupInput:
+      type: object
+      required: [name, username, age, password]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+          pattern: "^[a-zA-Z0-9_]+$"
+        age:
+          type: integer
+          minimum: 18
+          maximum: 120
+        password:
+          type: string
+          minLength: 10
+          maxLength: 128
+    LoginInput:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+    ErrorResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+    WalletType:
+      type: string
+      enum: [play_coins, winning_coins]
+    WalletCoinBalance:
+      type: object
+      description: >
+        Balance snapshot for a single coin type. `available` is the freely
+        spendable amount; `reserved` is locked by active holds (pending
+        withdrawals, tournament entries, admin/fraud holds).
+        available = balance − reserved.
+      required: [balance, reserved, available]
+      properties:
+        balance:
+          type: integer
+          description: >
+            Total settled balance — the sum of all completed ledger entries.
+        reserved:
+          type: integer
+          description: >
+            Coins locked by active reservations. Cannot be spent or converted
+            until the hold is released or confirmed.
+        available:
+          type: integer
+          description: >
+            Freely spendable coins (balance minus reserved).
+    WalletBalance:
+      type: object
+      description: >
+        A user's current coin balances. 1 coin = ₹1. Play Coins are spent on
+        entry fees and funded by deposits; Winning Coins are earned from
+        matches/tournaments and are the only balance that can be withdrawn.
+        Each coin type exposes `balance` (total settled), `reserved` (locked
+        by active holds), and `available` (freely spendable).
+      required: [playCoins, winningCoins]
+      properties:
+        playCoins:
+          $ref: "#/components/schemas/WalletCoinBalance"
+        winningCoins:
+          $ref: "#/components/schemas/WalletCoinBalance"
+    WalletTransaction:
+      type: object
+      description: >
+        A single immutable ledger entry. There is no status field — every
+        row represents an already-completed balance change.
+      required: [id, amount, balanceAfter, idempotencyKey, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          description: Signed whole-coin amount. Positive is a credit, negative is a debit.
+        balanceAfter:
+          type: integer
+        referenceType:
+          type: string
+          nullable: true
+        referenceId:
+          type: string
+          format: uuid
+          nullable: true
+        idempotencyKey:
+          type: string
+        reversalOfTransactionId:
+          type: string
+          format: uuid
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+    GetWalletTransactionsResult:
+      type: object
+      required: [transactions]
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/WalletTransaction"
+    ConvertWinningToPlayInput:
+      type: object
+      required: [amount, idempotencyKey]
+      properties:
+        amount:
+          type: integer
+          minimum: 1
+          description: Whole number of Winning Coins to convert into Play Coins.
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            Client-generated key identifying this conversion attempt.
+            Retrying the same request with the same key will not
+            double-apply the conversion.
+    DepositStatus:
+      type: string
+      enum: [pending, success, failed]
+      description: >
+        Lifecycle state of a deposit attempt.
+        `pending` — initiated, awaiting PayU webhook.
+        `success` — PayU confirmed payment; Play Coins credited.
+        `failed` — PayU reported failure or the attempt was abandoned.
+    Deposit:
+      type: object
+      description: >
+        A single deposit attempt. One row = one attempt. The deposit
+        remains `pending` until a PayU webhook updates it to `success`
+        or `failed`.
+      required:
+        - id
+        - userId
+        - amount
+        - coinsToCredit
+        - status
+        - merchantOrderId
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          description: Deposit amount in whole rupees.
+        coinsToCredit:
+          type: integer
+          description: >
+            Play Coins to be credited when the deposit succeeds.
+            Equal to `amount` under the current 1 coin = ₹1 rate.
+        status:
+          $ref: "#/components/schemas/DepositStatus"
+        merchantOrderId:
+          type: string
+          description: >
+            Our unique key sent to PayU as `txnid`. Used to match
+            incoming webhooks back to this deposit row.
+        mihpayId:
+          type: string
+          nullable: true
+          description: >
+            PayU's unique transaction identifier, populated when the
+            webhook is received. Used for duplicate webhook detection.
+        payuTxnId:
+          type: string
+          nullable: true
+          description: PayU's `txnid` echo from the webhook, stored for reconciliation.
+        failureReason:
+          type: string
+          nullable: true
+          description: Populated when status is `failed`. Null otherwise.
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Timestamp when the deposit transitioned to `success` or `failed`.
+            Null while status is `pending`.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    DepositInitiateInput:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: integer
+          enum: [50, 100, 200, 500, 1000, 2000, 5000]
+          description: >
+            Deposit amount in whole rupees. Must be one of the fixed
+            packages: ₹50, ₹100, ₹200, ₹500, ₹1000, ₹2000, ₹5000.
+    PayUFormParams:
+      type: object
+      description: >
+        Parameters the frontend must POST to PayU's payment page to
+        continue the payment flow. All fields are PayU-mandated.
+        The `hash` is pre-computed server-side and must not be
+        recomputed or modified by the client.
+      required:
+        - key
+        - txnid
+        - amount
+        - productinfo
+        - firstname
+        - email
+        - surl
+        - furl
+        - hash
+      properties:
+        key:
+          type: string
+          description: PayU merchant key.
+        txnid:
+          type: string
+          description: Our `merchantOrderId`, sent to PayU as the transaction ID.
+        amount:
+          type: string
+          description: Amount as a string (PayU requires string format, e.g. "100.00").
+        productinfo:
+          type: string
+          description: Human-readable product description shown on the PayU page.
+        firstname:
+          type: string
+          description: User's first name, shown on the PayU page.
+        email:
+          type: string
+          format: email
+          description: User's email address, required by PayU.
+        phone:
+          type: string
+          description: User's phone number (optional for PayU but recommended).
+        surl:
+          type: string
+          format: uri
+          description: Success redirect URL PayU will POST to after payment.
+        furl:
+          type: string
+          format: uri
+          description: Failure redirect URL PayU will POST to after payment.
+        hash:
+          type: string
+          description: >
+            SHA-512 HMAC computed server-side using the PayU salt.
+            The client must include this value verbatim in the form POST.
+    DepositInitiateResult:
+      type: object
+      required: [deposit, payuFormParams, paymentUrl]
+      properties:
+        deposit:
+          $ref: "#/components/schemas/Deposit"
+        payuFormParams:
+          $ref: "#/components/schemas/PayUFormParams"
+        paymentUrl:
+          type: string
+          format: uri
+          description: >
+            PayU payment page URL the frontend must POST payuFormParams to.
+            Determined by PAYU_ENV: test → https://test.payu.in/_payment,
+            production → https://secure.payu.in/_payment.
+    GetDepositHistoryResult:
+      type: object
+      required: [deposits]
+      properties:
+        deposits:
+          type: array
+          items:
+            $ref: "#/components/schemas/Deposit"
+    MobileVerificationStatus:
+      type: string
+      enum: [not_started, pending, verified]
+      description: >
+        Lifecycle state of a user's mobile number verification.
+        not_started — mobile number has not been submitted.
+        pending     — mobile number submitted, awaiting verification.
+        verified    — mobile number has been verified.
+    SubmitMobileNumberInput:
+      type: object
+      required: [mobileNumber]
+      properties:
+        mobileNumber:
+          type: string
+          pattern: "^\\+91[6-9]\\d{9}$"
+          description: >
+            Indian mobile number in E.164 format. Must start with +91 followed
+            by a 10-digit number beginning with 6, 7, 8, or 9
+            (e.g. +919876543210).
+    VerifyMobileNumberInput:
+      type: object
+      required: [firebaseIdToken]
+      properties:
+        firebaseIdToken:
+          type: string
+          minLength: 1
+          description: >
+            Phone authentication token returned by the client-side SDK after the
+            user completes phone verification. The server validates this token
+            using verifyPhoneToken() (Firebase Admin SDK after deployment; stub
+            in pre-Firebase builds) to extract and confirm the phone number.
+    UpdateEmailInput:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          description: >
+            The user's email address. Stored in lowercase. Must be unique across
+            all accounts. Required before a deposit can be initiated.
+    PayoutMethod:
+      type: string
+      enum: [bank_transfer, upi]
+      description: >
+        Payout method for a saved account or withdrawal.
+        bank_transfer — NEFT/IMPS to a bank account (account number + IFSC code).
+        upi           — Instant transfer to a UPI Virtual Payment Address (VPA).
+    PayoutAccount:
+      type: object
+      required:
+        - id
+        - userId
+        - method
+        - accountHolderName
+        - isVerified
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        method:
+          $ref: "#/components/schemas/PayoutMethod"
+        accountHolderName:
+          type: string
+        bankAccountNumberMasked:
+          type: string
+          nullable: true
+          description: >
+            Last 4 digits of the bank account number, prefixed with asterisks
+            (e.g. "****7788"). Null for UPI accounts. The full account number
+            is never returned.
+        bankIfscCode:
+          type: string
+          nullable: true
+          description: >
+            Standard Indian IFSC code. Null for UPI accounts.
+        bankName:
+          type: string
+          nullable: true
+          description: Optional display name for the bank. Null for UPI accounts.
+        upiId:
+          type: string
+          nullable: true
+          description: >
+            UPI Virtual Payment Address (e.g. "alice@okhdfc"). Null for
+            bank_transfer accounts. Populated identically regardless of
+            whether the VPA was entered manually or extracted from a QR code.
+        isVerified:
+          type: boolean
+          description: Whether the account has been KYC-verified (always false currently).
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AddBankTransferAccountInput:
+      type: object
+      required: [method, accountHolderName, bankAccountNumber, bankIfscCode]
+      properties:
+        method:
+          type: string
+          enum: [bank_transfer]
+        accountHolderName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        bankAccountNumber:
+          type: string
+          minLength: 5
+          maxLength: 30
+          description: Bank account number. Stored masked (last 4 digits only in responses).
+        bankIfscCode:
+          type: string
+          pattern: "^[A-Za-z]{4}0[A-Za-z0-9]{6}$"
+          description: >
+            Standard Indian IFSC code — 4 letters, literal '0', then 6 alphanumeric
+            characters (e.g. HDFC0001234). Normalised to uppercase before storage.
+        bankName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Optional display name for the bank.
+    AddUpiAccountInput:
+      type: object
+      required: [method, accountHolderName, upiId]
+      properties:
+        method:
+          type: string
+          enum: [upi]
+        accountHolderName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        upiId:
+          type: string
+          minLength: 3
+          maxLength: 50
+          pattern: "^[a-zA-Z0-9._-]+@[a-zA-Z0-9]+$"
+          description: >
+            UPI Virtual Payment Address (VPA), e.g. "alice@okhdfc". Accepted
+            identically whether entered manually or extracted from a QR code —
+            the backend does not distinguish between the two input methods.
+    AddPayoutAccountInput:
+      oneOf:
+        - $ref: "#/components/schemas/AddBankTransferAccountInput"
+        - $ref: "#/components/schemas/AddUpiAccountInput"
+      discriminator:
+        propertyName: method
+        mapping:
+          bank_transfer: "#/components/schemas/AddBankTransferAccountInput"
+          upi: "#/components/schemas/AddUpiAccountInput"
+    GetPayoutAccountsResult:
+      type: object
+      required: [bankAccounts]
+      properties:
+        bankAccounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayoutAccount"
+    WithdrawalStatus:
+      type: string
+      enum: [reserved, processing, completed, failed, cancelled]
+      description: >
+        Lifecycle state of a withdrawal request.
+        reserved   — Funds locked. Awaiting background job submission.
+        processing — Submitted to payout provider. Awaiting webhook or reconciliation.
+        completed  — Provider confirmed payout. Balance permanently debited.
+        failed     — Provider rejected or timed out. Funds returned.
+        cancelled  — Cancelled by user (only valid from `reserved`). Funds returned.
+    Withdrawal:
+      type: object
+      required:
+        - id
+        - userId
+        - amount
+        - status
+        - bankAccountId
+        - snapshotPayoutMethod
+        - snapshotAccountHolderName
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          description: Winning Coins to withdraw (1 coin = ₹1). Always positive.
+        status:
+          $ref: "#/components/schemas/WithdrawalStatus"
+        bankAccountId:
+          type: string
+          format: uuid
+          description: >
+            ID of the payout account selected at request time. The account may
+            be soft-deleted after the withdrawal is created; use the snapshot
+            fields for the actual payout details.
+        snapshotPayoutMethod:
+          $ref: "#/components/schemas/PayoutMethod"
+          description: >
+            Payout method captured at request time. Determines which snapshot
+            fields are populated (bank vs UPI).
+        snapshotAccountHolderName:
+          type: string
+        snapshotBankAccountNumberMasked:
+          type: string
+          nullable: true
+          description: >
+            Last 4 digits of the bank account number, prefixed with asterisks.
+            Null for UPI withdrawals. Full account number is never returned.
+        snapshotBankIfscCode:
+          type: string
+          nullable: true
+          description: IFSC code captured at request time. Null for UPI withdrawals.
+        snapshotBankName:
+          type: string
+          nullable: true
+          description: Bank display name captured at request time. Null for UPI withdrawals.
+        snapshotUpiId:
+          type: string
+          nullable: true
+          description: >
+            UPI VPA captured at request time. Null for bank_transfer withdrawals.
+        provider:
+          type: string
+          nullable: true
+          description: >
+            Payout provider name (e.g. "payu"). Populated after the withdrawal
+            is submitted. Null until then.
+        providerReference:
+          type: string
+          nullable: true
+          description: Provider's unique transfer ID. Null until submitted.
+        failureReason:
+          type: string
+          nullable: true
+          description: Human-readable failure reason. Null unless status is `failed`.
+        cancellationReason:
+          type: string
+          nullable: true
+          description: >
+            Cancellation reason. Null unless status is `cancelled`.
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        failedAt:
+          type: string
+          format: date-time
+          nullable: true
+        cancelledAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    InitiateWithdrawalInput:
+      type: object
+      required: [amount, payoutAccountId, idempotencyKey]
+      properties:
+        amount:
+          type: integer
+          minimum: 100
+          description: >
+            Winning Coins to withdraw. Must be a whole number >= 100 (₹100 minimum).
+        payoutAccountId:
+          type: string
+          format: uuid
+          description: >
+            ID of a pre-registered, non-deleted payout account (bank transfer or
+            UPI) belonging to the authenticated user.
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            Client-generated key. Retrying with the same key and the same amount
+            + payoutAccountId returns the existing withdrawal without creating a
+            duplicate. Retrying with the same key but different parameters returns
+            409.
+    GetWithdrawalsResult:
+      type: object
+      required: [withdrawals]
+      properties:
+        withdrawals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Withdrawal"
