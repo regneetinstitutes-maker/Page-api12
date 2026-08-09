@@ -260,6 +260,7 @@ export const tournamentsTable = pgTable(
     managerUnclaimedAlertedAt: timestamp("manager_unclaimed_alerted_at", { withTimezone: true }),
     managerUnclaimedSnoozedUntil: timestamp("manager_unclaimed_snoozed_until", { withTimezone: true }),
     managerResultTimeoutAlertedAt: timestamp("manager_result_timeout_alerted_at", { withTimezone: true }),
+    participantListNotifiedAt: timestamp("participant_list_notified_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()

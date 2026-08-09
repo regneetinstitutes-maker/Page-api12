@@ -23,7 +23,8 @@
 
 import { type NextFunction, type Request, type Response, Router, type IRouter } from "express";
 import { z } from "zod";
-import { db } from "@workspace/db";
+import { and, count, eq, gte } from "drizzle-orm";
+import { db, withdrawalsTable } from "@workspace/db";
 import { requireSession } from "../middlewares/requireSession";
 import {
   initiateWithdrawal,
@@ -41,6 +42,7 @@ import {
 } from "../lib/withdrawal";
 import type { Withdrawal } from "@workspace/db";
 import { decryptBankAccountNumber } from "../lib/bank-account-crypto";
+import { withDatabaseAdvisoryLock } from "../lib/db-lock";
 
 const router: IRouter = Router();
 
@@ -88,17 +90,10 @@ function toWithdrawalResponse(w: Withdrawal) {
 
 // ── Per-user rate limiter ─────────────────────────────────────────────────────
 
-interface RateWindow {
-  count: number;
-  resetAt: number;
-}
-
-// In-memory store — suitable for single-process deployments. For multi-process,
-// replace with Redis or a shared counter. The Map is keyed by user ID.
-const _rateLimitStore = new Map<string, RateWindow>();
-
 /**
- * Creates a per-user rate-limiting middleware using a fixed window counter.
+ * Creates a per-user rate-limiting middleware using PostgreSQL as the source
+ * of truth. The advisory lock makes the check and request admission safe when
+ * multiple EC2 instances receive requests for the same user concurrently.
  *
  * @param maxRequests - Maximum requests allowed per window.
  * @param windowMs    - Window duration in milliseconds.
@@ -107,7 +102,7 @@ export function createUserRateLimiter(
   maxRequests: number,
   windowMs: number,
 ): (req: Request, res: Response, next: NextFunction) => void {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // Bypass in test environment to prevent interference with integration tests.
     if (process.env.NODE_ENV === "test") {
       next();
@@ -122,28 +117,21 @@ export function createUserRateLimiter(
       return;
     }
 
-    const now = Date.now();
-    const entry = _rateLimitStore.get(userId);
-
-    if (!entry || now >= entry.resetAt) {
-      // First request in this window.
-      _rateLimitStore.set(userId, { count: 1, resetAt: now + windowMs });
+    const result = await withDatabaseAdvisoryLock(`withdrawal-rate:${userId}`, async () => {
+      const now = Date.now();
+      const cutoff = new Date(now - windowMs);
+      const [row] = await db.select({ count: count() }).from(withdrawalsTable).where(and(eq(withdrawalsTable.userId, userId), gte(withdrawalsTable.createdAt, cutoff)));
+      const requestCount = Number(row?.count ?? 0);
+      if (requestCount >= maxRequests) {
+        const retryAfterSec = Math.ceil(windowMs / 1000);
+        res.setHeader("Retry-After", String(retryAfterSec));
+        res.status(429).json({ code: "RATE_LIMIT_EXCEEDED", message: `Too many withdrawal requests. Please wait ${retryAfterSec} second(s) before trying again.` });
+        return false;
+      }
       next();
-      return;
-    }
-
-    if (entry.count >= maxRequests) {
-      const retryAfterSec = Math.ceil((entry.resetAt - now) / 1000);
-      res.setHeader("Retry-After", String(retryAfterSec));
-      res.status(429).json({
-        code: "RATE_LIMIT_EXCEEDED",
-        message: `Too many withdrawal requests. Please wait ${retryAfterSec} second(s) before trying again.`,
-      });
-      return;
-    }
-
-    entry.count += 1;
-    next();
+      return true;
+    });
+    if (result === undefined && !res.headersSent) res.status(429).json({ code: "RATE_LIMIT_BUSY", message: "Please retry this request." });
   };
 }
 

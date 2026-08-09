@@ -146,3 +146,23 @@ export async function searchCompetition(identifier: string) {
 export async function listUserPayoutAccounts(userId: string) {
   return db.select({ id: userBankAccountsTable.id, method: userBankAccountsTable.method, accountHolderName: userBankAccountsTable.accountHolderName, bankIfscCode: userBankAccountsTable.bankIfscCode, bankName: userBankAccountsTable.bankName, upiId: userBankAccountsTable.upiId, isVerified: userBankAccountsTable.isVerified, isDeleted: userBankAccountsTable.isDeleted, createdAt: userBankAccountsTable.createdAt }).from(userBankAccountsTable).where(eq(userBankAccountsTable.userId, userId)).orderBy(desc(userBankAccountsTable.createdAt));
 }
+
+export async function getAdminDashboard() {
+  const [[users], [hosts], [play], [winning], [cancelledOmbs], [cancelledTournaments]] = await Promise.all([
+    db.select({ total: sql<string>`count(*)` }).from(usersTable),
+    db.select({ total: sql<string>`count(*)` }).from(usersTable).where(or(eq(usersTable.role, "omb_host"), eq(usersTable.role, "tournament_host"))),
+    db.select({ total: sql<string>`coalesce(sum(${walletAccountsTable.balance}), 0)` }).from(walletAccountsTable).where(eq(walletAccountsTable.walletType, "play_coins")),
+    db.select({ total: sql<string>`coalesce(sum(${walletAccountsTable.balance}), 0)` }).from(walletAccountsTable).where(eq(walletAccountsTable.walletType, "winning_coins")),
+    db.select({ total: sql<string>`count(*)` }).from(matchesTable).where(eq(matchesTable.status, "cancelled")),
+    db.select({ total: sql<string>`count(*)` }).from(tournamentsTable).where(eq(tournamentsTable.status, "cancelled")),
+  ]);
+  const topDeposits = await db.select({ userId: depositsTable.userId, total: sql<string>`sum(${depositsTable.amount})` }).from(depositsTable).where(eq(depositsTable.status, "success")).groupBy(depositsTable.userId).orderBy(desc(sql`sum(${depositsTable.amount})`)).limit(20);
+  const topWithdrawals = await db.select({ userId: withdrawalsTable.userId, total: sql<string>`sum(${withdrawalsTable.amount})` }).from(withdrawalsTable).where(eq(withdrawalsTable.status, "completed")).groupBy(withdrawalsTable.userId).orderBy(desc(sql`sum(${withdrawalsTable.amount})`)).limit(20);
+  return {
+    totals: {
+      users: Number(users?.total ?? 0), hosts: Number(hosts?.total ?? 0), playCoins: Number(play?.total ?? 0), winningCoins: Number(winning?.total ?? 0), cancelledOmbs: Number(cancelledOmbs?.total ?? 0), cancelledTournaments: Number(cancelledTournaments?.total ?? 0),
+    },
+    topDeposits: topDeposits.map((row) => ({ userId: row.userId, total: Number(row.total ?? 0) })),
+    topWithdrawals: topWithdrawals.map((row) => ({ userId: row.userId, total: Number(row.total ?? 0) })),
+  };
+}

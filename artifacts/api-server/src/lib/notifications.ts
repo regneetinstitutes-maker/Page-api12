@@ -21,7 +21,7 @@
 
 import { logger } from "./logger";
 import { and, eq } from "drizzle-orm";
-import { db, pushDevicesTable } from "@workspace/db";
+import { db, pushDevicesTable, usersTable } from "@workspace/db";
 
 export interface PushNotification {
   userId: string;
@@ -51,6 +51,20 @@ export function notifyPush(notification: PushNotification): void {
   void deliverPush(notification).catch((error) => logger.error({ event: "push.delivery_failed", userId: notification.userId, error: error instanceof Error ? error.message : String(error) }, "Push notification delivery failed."));
 }
 
+export async function notifyRolePush(
+  role: "admin" | "support" | "manager",
+  title: string,
+  body: string,
+  data: Record<string, string>,
+): Promise<void> {
+  try {
+    const users = await db.select({ userId: usersTable.id }).from(usersTable).where(and(eq(usersTable.role, role), eq(usersTable.accountStatus, "active")));
+    for (const user of users) notifyPush({ userId: user.userId, title, body, data });
+  } catch (error) {
+    logger.error({ event: "push.role_delivery_failed", role, error: error instanceof Error ? error.message : String(error) }, "Operational push lookup failed.");
+  }
+}
+
 // ── Withdrawal notifications ──────────────────────────────────────────────────
 
 export interface WithdrawalCompletedPayload {
@@ -73,7 +87,12 @@ export async function notifyWithdrawalCompleted(
   payload: WithdrawalCompletedPayload,
 ): Promise<void> {
   try {
-    // TODO: replace with real notification delivery (push, SMS, email).
+    notifyPush({
+      userId: payload.userId,
+      title: "Withdrawal completed",
+      body: `Your withdrawal of ₹${payload.amount} has been completed.`,
+      data: { type: "withdrawal", withdrawalId: payload.withdrawalId },
+    });
     logger.info(
       {
         event: "withdrawal.notification.completed",
@@ -116,7 +135,12 @@ export async function notifyWithdrawalFailed(
   payload: WithdrawalFailedPayload,
 ): Promise<void> {
   try {
-    // TODO: replace with real notification delivery.
+    notifyPush({
+      userId: payload.userId,
+      title: "Withdrawal failed",
+      body: `Your withdrawal of ₹${payload.amount} failed and the funds were returned.`,
+      data: { type: "withdrawal", withdrawalId: payload.withdrawalId },
+    });
     logger.info(
       {
         event: "withdrawal.notification.failed",

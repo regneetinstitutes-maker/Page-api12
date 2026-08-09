@@ -1,9 +1,13 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
 import { requireRole, requireSession } from "../middlewares/requireSession";
-import { OperationsError, listUserPayoutAccounts, resetUserPassword, searchCompetition, searchUserByMobile, updateUserAccountStatus } from "../lib/operations";
+import { OperationsError, getAdminDashboard, listUserPayoutAccounts, resetUserPassword, searchCompetition, searchUserByMobile, updateUserAccountStatus } from "../lib/operations";
 
 const router: IRouter = Router();
+
+router.get("/operations/admin/dashboard", requireSession, requireRole("admin"), async (_req, res) => {
+  res.json(await getAdminDashboard());
+});
 
 function sendOperationsError(res: Parameters<IRouter["use"]>[1] extends never ? never : any, error: unknown) {
   if (error instanceof OperationsError) {

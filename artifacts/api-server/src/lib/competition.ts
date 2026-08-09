@@ -27,8 +27,8 @@ import { recordCompletedTransaction } from "./wallet";
 import { logger } from "./logger";
 import { createWalletAccountsForUser } from "./wallet";
 import { hashPassword, PASSWORD_ALGO } from "./password";
-import { competitionObjectKey, createDownloadUrl, createUploadUrl } from "./storage";
-import { notifyPush } from "./notifications";
+import { competitionObjectKey, createDownloadUrl, createUploadUrl, verifyUploadedObject } from "./storage";
+import { notifyPush, notifyRolePush } from "./notifications";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type CompetitionType = "omb" | "tournament";
@@ -410,10 +410,14 @@ async function notifyNewCompetitionHosts(type: CompetitionType, competitionId: s
 }
 
 async function notifyCompetitionParticipants(type: CompetitionType, competitionId: string, title: string, body: string) {
-  const participants = type === "omb"
-    ? await db.select({ userId: matchParticipantsTable.userId }).from(matchParticipantsTable).where(eq(matchParticipantsTable.matchId, competitionId))
-    : await db.select({ userId: tournamentParticipantsTable.userId }).from(tournamentParticipantsTable).where(eq(tournamentParticipantsTable.tournamentId, competitionId));
-  for (const participant of participants) notifyPush({ userId: participant.userId, title, body, data: { type, competitionId } });
+  try {
+    const participants = type === "omb"
+      ? await db.select({ userId: matchParticipantsTable.userId }).from(matchParticipantsTable).where(eq(matchParticipantsTable.matchId, competitionId))
+      : await db.select({ userId: tournamentParticipantsTable.userId }).from(tournamentParticipantsTable).where(eq(tournamentParticipantsTable.tournamentId, competitionId));
+    for (const participant of participants) notifyPush({ userId: participant.userId, title, body, data: { type, competitionId } });
+  } catch (error) {
+    logger.error({ event: "competition.notification_lookup_failed", type, competitionId, error: error instanceof Error ? error.message : String(error) }, "Competition participant notification lookup failed.");
+  }
 }
 
 async function nextSeat(tx: Tx, eventId: string, type: CompetitionType): Promise<number> {
@@ -611,6 +615,7 @@ export async function submitOmbResults(
   userId: string,
   positions: Array<{ participantId: string; position: number; positionConfirmation: number; isCheater?: boolean; cheaterConfirmation?: boolean }>,
 ) {
+  const cheaterUserIds: string[] = [];
   const updated = await db.transaction(async (tx) => {
     const host = await getHostForEvent(tx, "omb", id, userId);
     const [match] = await tx.select().from(matchesTable).where(eq(matchesTable.id, id)).for("update");
@@ -634,6 +639,7 @@ export async function submitOmbResults(
       const participant = participants.find((candidate) => candidate.id === item.participantId);
       if (!participant) throw new CompetitionError("PARTICIPANT_NOT_FOUND", "A submitted participant was not found.");
       const isCheater = item.isCheater === true;
+      if (isCheater) cheaterUserIds.push(participant.userId);
       await tx.update(matchParticipantsTable).set({
         position: item.position,
         isCheater,
@@ -646,6 +652,11 @@ export async function submitOmbResults(
     return updated;
   });
   void notifyCompetitionParticipants("omb", id, "Results are out", "Check your match result and prize.");
+  for (const userId of cheaterUserIds) notifyPush({ userId, title: "Hacker/Cheater tag applied", body: "A Hacker/Cheater tag was applied to your result. Contact Support to appeal.", data: { type: "omb", competitionId: id } });
+  if (cheaterUserIds.length) {
+    void notifyRolePush("admin", "Hacker/Cheater tag", "A competition participant was tagged as a Hacker/Cheater.", { type: "omb", competitionId: id });
+    void notifyRolePush("support", "Hacker/Cheater tag", "A competition participant was tagged as a Hacker/Cheater.", { type: "omb", competitionId: id });
+  }
   return updated;
 }
 
@@ -804,6 +815,7 @@ export async function submitTournamentResults(
   userId: string,
   values: TournamentFinalValue[],
 ) {
+  const cheaterUserIds: string[] = [];
   const updated = await db.transaction(async (tx) => {
     const host = await getHostForEvent(tx, "tournament", id, userId);
     const [tournament] = await tx
@@ -851,6 +863,7 @@ export async function submitTournamentResults(
     const schedule = await getSchedule(tx, tournament.scheduleId, "tournament");
     const prizeByPosition = new Map(schedule.prizes.map((prize) => [prize.position, prize.amount]));
     for (const [index, item] of scored.entries()) {
+      if (item.isCheater) cheaterUserIds.push(item.participant.userId);
       const rank = index + 1;
       const prizeAmount = item.isCheater ? 0 : (prizeByPosition.get(rank) ?? 0);
       await tx
@@ -883,6 +896,11 @@ export async function submitTournamentResults(
     return updated;
   });
   void notifyCompetitionParticipants("tournament", id, "Results are out", "Check your tournament result and prize.");
+  for (const userId of cheaterUserIds) notifyPush({ userId, title: "Hacker/Cheater tag applied", body: "A Hacker/Cheater tag was applied to your result. Contact Support to appeal.", data: { type: "tournament", competitionId: id } });
+  if (cheaterUserIds.length) {
+    void notifyRolePush("admin", "Hacker/Cheater tag", "A competition participant was tagged as a Hacker/Cheater.", { type: "tournament", competitionId: id });
+    void notifyRolePush("support", "Hacker/Cheater tag", "A competition participant was tagged as a Hacker/Cheater.", { type: "tournament", competitionId: id });
+  }
   return updated;
 }
 
@@ -1066,8 +1084,11 @@ export async function createCompetitionUploadUrl(
     }
     const table = type === "omb" ? matchesTable : tournamentsTable;
     const [event] = await tx.select({ id: table.id, status: table.status }).from(table).where(eq(table.id, id)).for("update");
-    if (!event || ["completed", "cancelled"].includes(event.status)) {
+    if (!event || event.status === "completed" || (event.status === "cancelled" && kind === "screenshot")) {
       throw new CompetitionError("INVALID_STATUS", "Files cannot be uploaded for this competition.");
+    }
+    if (kind === "voice-note" && event.status !== "cancelled") {
+      throw new CompetitionError("INVALID_STATUS", "Voice notes can only be attached to cancelled competitions.");
     }
     const key = competitionObjectKey(type, id, kind);
     return { key, uploadUrl: await createUploadUrl({ key, contentType, maxBytes: kind === "screenshot" ? 10_000_000 : 20_000_000 }) };
@@ -1084,6 +1105,10 @@ export async function attachCompetitionObject(
   if (key !== competitionObjectKey(type, id, kind)) {
     throw new CompetitionError("INVALID_OBJECT_KEY", "The object key does not belong to this competition.");
   }
+  const contentTypes = kind === "screenshot"
+    ? ["image/jpeg", "image/png", "image/webp"]
+    : ["audio/mpeg", "audio/mp4", "audio/wav", "audio/webm"];
+  await verifyUploadedObject({ key, contentTypes, maxBytes: kind === "screenshot" ? 10_000_000 : 20_000_000 });
   return db.transaction(async (tx) => {
     if (kind === "voice-note") {
       const [manager] = await tx.select({ id: usersTable.id }).from(usersTable).where(and(eq(usersTable.id, userId), eq(usersTable.role, "manager"))).limit(1);
@@ -1091,6 +1116,11 @@ export async function attachCompetitionObject(
     } else {
       await getHostForEvent(tx, type, id, userId);
     }
+    const [event] = type === "omb"
+      ? await tx.select({ status: matchesTable.status }).from(matchesTable).where(eq(matchesTable.id, id)).for("update")
+      : await tx.select({ status: tournamentsTable.status }).from(tournamentsTable).where(eq(tournamentsTable.id, id)).for("update");
+    if (!event) throw new CompetitionError("COMPETITION_NOT_FOUND", "Competition was not found.", 404);
+    if (kind === "voice-note" && event.status !== "cancelled") throw new CompetitionError("INVALID_STATUS", "Voice notes can only be attached to cancelled competitions.");
     const [updated] = type === "omb"
       ? await tx.update(matchesTable).set(kind === "screenshot" ? { screenshotObjectKey: key } : { voiceNoteObjectKey: key }).where(eq(matchesTable.id, id)).returning()
       : await tx.update(tournamentsTable).set({ voiceNoteObjectKey: key }).where(eq(tournamentsTable.id, id)).returning();
@@ -1161,6 +1191,9 @@ export async function cancelCompetition(
     return updated;
   });
   void notifyCompetitionParticipants(type, id, "Competition cancelled", `${type === "omb" ? "Your match" : "Your tournament"} was cancelled. ${reason}`);
+  for (const role of ["manager", "admin", "support"] as const) {
+    void notifyRolePush(role, "Competition cancelled", `${type === "omb" ? "Match" : "Tournament"} ${id} was cancelled.`, { type, competitionId: id });
+  }
   return updated;
 }
 
@@ -1263,16 +1296,42 @@ export async function runCompetitionScheduler(now = new Date()) {
               .where(and(eq(tournamentsTable.id, eventRecord.id), isNull(tournamentsTable.managerUnclaimedAlertedAt)));
           }
           logger.warn({ event: "competition.unclaimed", competitionId: eventRecord.id, type }, "Competition has no host.");
+          void notifyRolePush("manager", "Competition unclaimed", `No host has claimed this ${type === "omb" ? "match" : "tournament"}.`, { type, competitionId: eventRecord.id });
         }
       }
       const lowParticipationAt = type === "omb" ? revealAt(schedule) : schedule.entryClosesAt;
-      if (eventRecord.status === "waiting" && lowParticipationAt && now >= lowParticipationAt && participantCount <= winnerCount(schedule)) {
+      const [latestEvent] = await db
+        .select({ id: table.id })
+        .from(table)
+        .where(eq(table.scheduleId, schedule.id))
+        .orderBy(desc(table.createdAt))
+        .limit(1);
+      if (eventRecord.status === "waiting" && latestEvent?.id === eventRecord.id && lowParticipationAt && now >= lowParticipationAt && participantCount <= winnerCount(schedule)) {
         await cancelCompetition(type, eventRecord.id, LOW_PARTICIPATION_REASON, false, true);
         continue;
+      }
+      const tournamentRecord = type === "tournament" ? eventRecord as Tournament : null;
+      if (tournamentRecord?.entryClosesAt && now >= new Date(tournamentRecord.entryClosesAt.getTime() + 60 * 60_000) && !tournamentRecord.participantListNotifiedAt) {
+        const [marked] = await db
+          .update(tournamentsTable)
+          .set({ participantListNotifiedAt: new Date(now) })
+          .where(and(eq(tournamentsTable.id, eventRecord.id), isNull(tournamentsTable.participantListNotifiedAt)))
+          .returning({ id: tournamentsTable.id });
+        if (marked) {
+          void notifyCompetitionParticipants("tournament", eventRecord.id, "Participant list available", "The participant list for your tournament is now available.");
+        }
       }
       if (type === "omb" && eventRecord.status === "waiting" && schedule.startsAt && now >= new Date(schedule.startsAt.getTime() + 5 * 60_000) && !(eventRecord as Match).roomId) {
         await cancelCompetition(type, eventRecord.id, "Room details were not submitted in time.", true);
         continue;
+      }
+      if (type === "omb" && eventRecord.status === "room_available" && schedule.startsAt && now >= schedule.startsAt) {
+        await db.update(matchesTable).set({ status: "result_pending" }).where(and(eq(matchesTable.id, eventRecord.id), eq(matchesTable.status, "room_available")));
+        void notifyCompetitionParticipants("omb", eventRecord.id, "Match ended", "Your match has ended. Results are being processed.");
+      }
+      if (type === "tournament" && eventRecord.status === "ongoing" && (eventRecord as Tournament).endsAt && now >= (eventRecord as Tournament).endsAt!) {
+        await db.update(tournamentsTable).set({ status: "result_pending" }).where(and(eq(tournamentsTable.id, eventRecord.id), eq(tournamentsTable.status, "ongoing")));
+        void notifyCompetitionParticipants("tournament", eventRecord.id, "Tournament duration complete", "Your tournament duration is complete. Results are being processed.");
       }
       if (
         type === "omb" &&
@@ -1287,6 +1346,7 @@ export async function runCompetitionScheduler(now = new Date()) {
           .set({ managerRoomTimeoutAlertedAt: new Date(now) })
           .where(and(eq(matchesTable.id, eventRecord.id), isNull(matchesTable.managerRoomTimeoutAlertedAt)));
         logger.warn({ event: "competition.room_timeout", competitionId: eventRecord.id, type }, "Host has not uploaded room details.");
+        void notifyRolePush("manager", "Room details timeout", "Host has not uploaded room details on time.", { type, competitionId: eventRecord.id });
       }
       const deadline =
         type === "tournament" && (eventRecord as Tournament).endsAt
@@ -1311,6 +1371,7 @@ export async function runCompetitionScheduler(now = new Date()) {
             .where(and(eq(tournamentsTable.id, eventRecord.id), isNull(tournamentsTable.managerResultTimeoutAlertedAt)));
         }
         logger.warn({ event: "competition.result_timeout", competitionId: eventRecord.id, type }, "Host has not submitted results.");
+        void notifyRolePush("manager", "Result submission timeout", "Host has not submitted competition results on time.", { type, competitionId: eventRecord.id });
       }
       if (deadline && ["waiting", "room_available", "ongoing", "result_pending"].includes(eventRecord.status) && now >= new Date(deadline.getTime() + 5 * 60_000)) {
         await cancelCompetition(type, eventRecord.id, "Results were not submitted in time.", true);
