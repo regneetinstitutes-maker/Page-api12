@@ -10,12 +10,15 @@ import {
   matchesTable,
   modesTable,
   tournamentParticipantsTable,
+  tournamentPositionRevealsTable,
+  tournamentPositionValuesTable,
   tournamentsTable,
   walletAccountsTable,
   walletReservationsTable,
   walletTransactionsTable,
   type CompetitionSchedule,
   type Match,
+  type PrizeDefinition,
   type Tournament,
 } from "@workspace/db";
 import { createReservation, confirmReservation, releaseReservation } from "./reservation";
@@ -459,7 +462,343 @@ export async function submitOmbResults(
   });
 }
 
-export async function cancelCompetition(type: CompetitionType, id: string, reason: string, refund: boolean) {
+export interface TournamentInitialValue {
+  participantId: string;
+  initialValue: number;
+}
+
+export interface TournamentFinalValue {
+  participantId: string;
+  finalValue: number;
+  isCheater?: boolean;
+}
+
+/**
+ * Starts a tournament and records the immutable starting metric for every
+ * participant in one transaction. The host must submit a value for every
+ * participant so ranking can never be based on a partially initialized event.
+ */
+export async function startTournament(
+  id: string,
+  userId: string,
+  values: TournamentInitialValue[],
+) {
+  return db.transaction(async (tx) => {
+    const host = await getHostForEvent(tx, "tournament", id, userId);
+    const [tournament] = await tx
+      .select()
+      .from(tournamentsTable)
+      .where(eq(tournamentsTable.id, id))
+      .for("update");
+    if (!tournament || tournament.status !== "waiting") {
+      throw new CompetitionError("INVALID_STATUS", "This tournament cannot be started.");
+    }
+    const [schedule] = await tx
+      .select()
+      .from(competitionSchedulesTable)
+      .where(eq(competitionSchedulesTable.id, tournament.scheduleId))
+      .limit(1);
+    if (!schedule || !schedule.durationMinutes) {
+      throw new CompetitionError("SCHEDULE_NOT_FOUND", "Tournament schedule was not found.", 500);
+    }
+    if (tournament.entryClosesAt && new Date() < tournament.entryClosesAt) {
+      throw new CompetitionError("ENTRY_OPEN", "A tournament can only start after entry closes.");
+    }
+    const participants = await tx
+      .select()
+      .from(tournamentParticipantsTable)
+      .where(eq(tournamentParticipantsTable.tournamentId, id))
+      .for("update");
+    if (!participants.length || values.length !== participants.length) {
+      throw new CompetitionError("INITIAL_VALUES_REQUIRED", "Submit exactly one initial value for every participant.");
+    }
+    const valueByParticipant = new Map(values.map((value) => [value.participantId, value.initialValue]));
+    if (valueByParticipant.size !== values.length || values.some((value) => !Number.isInteger(value.initialValue))) {
+      throw new CompetitionError("INVALID_INITIAL_VALUES", "Initial values must be unique participant entries and whole numbers.");
+    }
+    const startedAt = new Date();
+    const endsAt = new Date(startedAt.getTime() + schedule.durationMinutes * 60_000);
+    for (const participant of participants) {
+      const initialValue = valueByParticipant.get(participant.id);
+      if (initialValue === undefined) {
+        throw new CompetitionError("PARTICIPANT_NOT_FOUND", "An initial value was submitted for an unknown participant.");
+      }
+      await tx
+        .update(tournamentParticipantsTable)
+        .set({ initialValue, startedAt, endsAt })
+        .where(eq(tournamentParticipantsTable.id, participant.id));
+    }
+    const [updated] = await tx
+      .update(tournamentsTable)
+      .set({ status: "ongoing", startedAt, endsAt })
+      .where(eq(tournamentsTable.id, id))
+      .returning();
+    await tx
+      .update(hostsTable)
+      .set({ lastLoginAt: new Date() })
+      .where(eq(hostsTable.id, host.id));
+    return updated;
+  });
+}
+
+/**
+ * Completes a tournament atomically. Performance is finalValue - initialValue;
+ * higher performance ranks first. Equal performances use join order as the
+ * deterministic tie-breaker, so every participant receives one stable rank.
+ */
+export async function submitTournamentResults(
+  id: string,
+  userId: string,
+  values: TournamentFinalValue[],
+) {
+  return db.transaction(async (tx) => {
+    const host = await getHostForEvent(tx, "tournament", id, userId);
+    const [tournament] = await tx
+      .select()
+      .from(tournamentsTable)
+      .where(eq(tournamentsTable.id, id))
+      .for("update");
+    if (!tournament || !["ongoing", "result_pending"].includes(tournament.status)) {
+      throw new CompetitionError("INVALID_STATUS", "Results cannot be submitted for this tournament.");
+    }
+    if (tournament.endsAt && new Date() < tournament.endsAt) {
+      throw new CompetitionError("TOURNAMENT_ACTIVE", "Tournament results cannot be submitted before the tournament ends.");
+    }
+    const participants = await tx
+      .select()
+      .from(tournamentParticipantsTable)
+      .where(eq(tournamentParticipantsTable.tournamentId, id))
+      .orderBy(asc(tournamentParticipantsTable.joinedAt))
+      .for("update");
+    if (!participants.length || values.length !== participants.length) {
+      throw new CompetitionError("FINAL_VALUES_REQUIRED", "Submit exactly one final value for every participant.");
+    }
+    const valueByParticipant = new Map(values.map((value) => [value.participantId, value]));
+    if (
+      valueByParticipant.size !== values.length ||
+      values.some((value) => !Number.isInteger(value.finalValue))
+    ) {
+      throw new CompetitionError("INVALID_FINAL_VALUES", "Final values must be unique participant entries and whole numbers.");
+    }
+    const scored = participants.map((participant) => {
+      const submitted = valueByParticipant.get(participant.id);
+      if (!submitted || participant.initialValue == null) {
+        throw new CompetitionError("INITIAL_VALUES_REQUIRED", "Every participant must have an initial value before results.");
+      }
+      return {
+        participant,
+        finalValue: submitted.finalValue,
+        isCheater: submitted.isCheater === true,
+        performance: submitted.finalValue - participant.initialValue,
+      };
+    });
+    scored.sort((a, b) => b.performance - a.performance || a.participant.joinedAt.getTime() - b.participant.joinedAt.getTime());
+    const schedule = await getSchedule(tx, tournament.scheduleId, "tournament");
+    const prizeByPosition = new Map(schedule.prizes.map((prize) => [prize.position, prize.amount]));
+    for (const [index, item] of scored.entries()) {
+      const rank = index + 1;
+      const prizeAmount = item.isCheater ? 0 : (prizeByPosition.get(rank) ?? 0);
+      await tx
+        .update(tournamentParticipantsTable)
+        .set({
+          finalValue: item.finalValue,
+          performance: item.performance,
+          rank,
+          isCheater: item.isCheater,
+          prizeAmount,
+        })
+        .where(eq(tournamentParticipantsTable.id, item.participant.id));
+      if (!item.isCheater) {
+        await creditPrize(tx, item.participant.userId, prizeAmount, id, item.participant.id);
+      }
+    }
+    const [updated] = await tx
+      .update(tournamentsTable)
+      .set({ status: "completed", resultSubmittedAt: new Date() })
+      .where(eq(tournamentsTable.id, id))
+      .returning();
+    await tx
+      .update(hostsTable)
+      .set({
+        currentAssignmentId: null,
+        currentAssignmentType: null,
+        completedCount: sql`${hostsTable.completedCount} + 1`,
+      })
+      .where(eq(hostsTable.id, host.id));
+    return updated;
+  });
+}
+
+export async function createTournamentPositionReveal(input: {
+  scheduleId: string;
+  revealAt: Date;
+}) {
+  const schedule = await db
+    .select({ id: competitionSchedulesTable.id, type: competitionSchedulesTable.type })
+    .from(competitionSchedulesTable)
+    .where(eq(competitionSchedulesTable.id, input.scheduleId))
+    .limit(1);
+  if (!schedule[0] || schedule[0].type !== "tournament") {
+    throw new CompetitionError("SCHEDULE_NOT_FOUND", "Tournament schedule was not found.", 404);
+  }
+  const [reveal] = await db
+    .insert(tournamentPositionRevealsTable)
+    .values({ scheduleId: input.scheduleId, revealAt: input.revealAt })
+    .returning();
+  return reveal;
+}
+
+/**
+ * Stores one complete scheduled standings snapshot. A partial snapshot is not
+ * published: all current participants must be submitted in the same request.
+ */
+export async function submitTournamentPositionReveal(
+  tournamentId: string,
+  revealId: string,
+  userId: string,
+  values: Array<{ participantId: string; metricValue: number }>,
+) {
+  return db.transaction(async (tx) => {
+    await getHostForEvent(tx, "tournament", tournamentId, userId);
+    const [tournament] = await tx
+      .select()
+      .from(tournamentsTable)
+      .where(eq(tournamentsTable.id, tournamentId))
+      .for("update");
+    if (!tournament || !["ongoing", "result_pending"].includes(tournament.status)) {
+      throw new CompetitionError("INVALID_STATUS", "Standings cannot be submitted for this tournament.");
+    }
+    const [reveal] = await tx
+      .select()
+      .from(tournamentPositionRevealsTable)
+      .where(
+        and(
+          eq(tournamentPositionRevealsTable.id, revealId),
+          eq(tournamentPositionRevealsTable.scheduleId, tournament.scheduleId),
+        ),
+      )
+      .limit(1);
+    if (!reveal) throw new CompetitionError("REVEAL_NOT_FOUND", "Position reveal schedule was not found.", 404);
+    const participants = await tx
+      .select()
+      .from(tournamentParticipantsTable)
+      .where(eq(tournamentParticipantsTable.tournamentId, tournamentId))
+      .orderBy(asc(tournamentParticipantsTable.joinedAt))
+      .for("update");
+    if (!participants.length || values.length !== participants.length) {
+      throw new CompetitionError("STANDINGS_REQUIRED", "Submit one metric value for every participant.");
+    }
+    const valueByParticipant = new Map(values.map((value) => [value.participantId, value.metricValue]));
+    if (
+      valueByParticipant.size !== values.length ||
+      values.some((value) => !Number.isInteger(value.metricValue)) ||
+      participants.some((participant) => !valueByParticipant.has(participant.id))
+    ) {
+      throw new CompetitionError("INVALID_STANDINGS", "Standings must contain exactly one value for every participant.");
+    }
+    const existing = await tx
+      .select({ id: tournamentPositionValuesTable.id })
+      .from(tournamentPositionValuesTable)
+      .where(eq(tournamentPositionValuesTable.revealId, revealId))
+      .limit(1);
+    if (existing[0]) {
+      throw new CompetitionError("REVEAL_ALREADY_SUBMITTED", "This position reveal has already been submitted.");
+    }
+    const submittedAt = new Date();
+    await tx.insert(tournamentPositionValuesTable).values(
+      participants.map((participant) => ({
+        revealId,
+        tournamentId,
+        participantId: participant.id,
+        metricValue: valueByParticipant.get(participant.id)!,
+        submittedAt,
+      })),
+    );
+    const winnerCount = (await getSchedule(tx, tournament.scheduleId, "tournament")).prizes.length;
+    return {
+      revealId,
+      tournamentId,
+      publishedAt: submittedAt,
+      chart: participants
+        .map((participant) => ({
+          gameUid: participant.gameUid,
+          gameName: participant.gameName,
+          metricValue: valueByParticipant.get(participant.id)!,
+          submittedAt,
+        }))
+        .sort((a, b) => b.metricValue - a.metricValue)
+        .slice(0, winnerCount),
+    };
+  });
+}
+
+export async function getTournamentParticipantList(
+  tournamentId: string,
+  now = new Date(),
+) {
+  const [tournament] = await db
+    .select()
+    .from(tournamentsTable)
+    .where(eq(tournamentsTable.id, tournamentId))
+    .limit(1);
+  if (!tournament) return null;
+  if (!tournament.entryClosesAt || now.getTime() < tournament.entryClosesAt.getTime() + 60 * 60_000) {
+    throw new CompetitionError("PARTICIPANT_LIST_LOCKED", "The participant list is available one hour after entry closes.");
+  }
+  const participants = await db
+    .select({
+      gameUid: tournamentParticipantsTable.gameUid,
+      gameName: tournamentParticipantsTable.gameName,
+      joinedAt: tournamentParticipantsTable.joinedAt,
+    })
+    .from(tournamentParticipantsTable)
+    .where(eq(tournamentParticipantsTable.tournamentId, tournamentId))
+    .orderBy(asc(tournamentParticipantsTable.joinedAt));
+  return { tournamentId, participants };
+}
+
+export async function snoozeCompetitionUnclaimedAlert(
+  type: CompetitionType,
+  id: string,
+  minutes: number,
+) {
+  const snoozedUntil = new Date(Date.now() + minutes * 60_000);
+  const table = type === "omb" ? matchesTable : tournamentsTable;
+  const [updated] = await db
+    .update(table)
+    .set({ managerUnclaimedSnoozedUntil: snoozedUntil })
+    .where(and(eq(table.id, id), eq(table.status, "waiting"), isNull(table.hostId)))
+    .returning();
+  if (!updated) throw new CompetitionError("NOT_AVAILABLE", "This competition is no longer unclaimed.");
+  return updated;
+}
+
+async function distributeLowParticipationPrizes(
+  tx: Tx,
+  type: CompetitionType,
+  competitionId: string,
+  participants: Array<{ id: string; userId: string; reservationId: string }>,
+  schedule: CompetitionSchedule,
+) {
+  const shuffled = [...schedule.prizes].sort(() => randomInt(-1_000_000, 1_000_001));
+  for (const [index, participant] of participants.entries()) {
+    const prizeAmount = shuffled[index]?.amount ?? 0;
+    if (type === "omb") {
+      await tx.update(matchParticipantsTable).set({ prizeAmount }).where(eq(matchParticipantsTable.id, participant.id));
+    } else {
+      await tx.update(tournamentParticipantsTable).set({ prizeAmount }).where(eq(tournamentParticipantsTable.id, participant.id));
+    }
+    await creditPrize(tx, participant.userId, prizeAmount, competitionId, participant.id);
+  }
+}
+
+export async function cancelCompetition(
+  type: CompetitionType,
+  id: string,
+  reason: string,
+  refund: boolean,
+  lowParticipation = false,
+) {
   return db.transaction(async (tx) => {
     const table = type === "omb" ? matchesTable : tournamentsTable;
     const [event] = await tx.select().from(table).where(eq(table.id, id)).for("update");
@@ -470,6 +809,9 @@ export async function cancelCompetition(type: CompetitionType, id: string, reaso
         : await tx.select().from(tournamentParticipantsTable).where(eq(tournamentParticipantsTable.tournamentId, id)).for("update");
     if (refund) {
       for (const participant of participants) await refundParticipant(tx, participant.reservationId, id, participant.userId);
+    } else if (lowParticipation) {
+      const schedule = await getSchedule(tx, event.scheduleId, type);
+      await distributeLowParticipationPrizes(tx, type, id, participants, schedule);
     }
     const [updated] = await tx.update(table).set({ status: "cancelled", cancellationReason: reason, cancelledAt: new Date() }).where(eq(table.id, id)).returning();
     if (event.hostId) {
@@ -532,26 +874,81 @@ export async function runCompetitionScheduler(now = new Date()) {
     const table = type === "omb" ? matchesTable : tournamentsTable;
     const events = await db.select().from(table).where(inArray(table.status, ["waiting", "room_available", "ongoing", "result_pending"]));
     for (const event of events.filter((candidate) => candidate.scheduleId === schedule.id)) {
+      const eventRecord = type === "omb" ? (event as Match) : (event as Tournament);
       const countResult =
         type === "omb"
           ? await db.select({ count: count(matchParticipantsTable.id) }).from(matchParticipantsTable).where(eq(matchParticipantsTable.matchId, event.id))
           : await db.select({ count: count(tournamentParticipantsTable.id) }).from(tournamentParticipantsTable).where(eq(tournamentParticipantsTable.tournamentId, event.id));
       const participantCount = Number(countResult[0]?.count ?? 0);
-      if (event.status === "waiting" && !event.hostId && now.getTime() >= event.createdAt.getTime() + schedule.managerAlertAfterMinutes * 60_000) {
-        logger.warn({ event: "competition.unclaimed", competitionId: event.id, type }, "Competition has no host.");
+      if (eventRecord.status === "waiting" && !eventRecord.hostId && now.getTime() >= eventRecord.createdAt.getTime() + schedule.managerAlertAfterMinutes * 60_000) {
+        const shouldAlert =
+          eventRecord.managerUnclaimedSnoozedUntil == null ||
+          now >= eventRecord.managerUnclaimedSnoozedUntil;
+        if (shouldAlert) {
+          const alertAt = new Date(now);
+          if (type === "omb") {
+            await db
+              .update(matchesTable)
+              .set({ managerUnclaimedAlertedAt: alertAt })
+              .where(and(eq(matchesTable.id, eventRecord.id), isNull(matchesTable.managerUnclaimedAlertedAt)));
+          } else {
+            await db
+              .update(tournamentsTable)
+              .set({ managerUnclaimedAlertedAt: alertAt })
+              .where(and(eq(tournamentsTable.id, eventRecord.id), isNull(tournamentsTable.managerUnclaimedAlertedAt)));
+          }
+          logger.warn({ event: "competition.unclaimed", competitionId: eventRecord.id, type }, "Competition has no host.");
+        }
       }
       const lowParticipationAt = type === "omb" ? revealAt(schedule) : schedule.entryClosesAt;
-      if (event.status === "waiting" && lowParticipationAt && now >= lowParticipationAt && participantCount <= winnerCount(schedule)) {
-        await cancelCompetition(type, event.id, LOW_PARTICIPATION_REASON, false);
+      if (eventRecord.status === "waiting" && lowParticipationAt && now >= lowParticipationAt && participantCount <= winnerCount(schedule)) {
+        await cancelCompetition(type, eventRecord.id, LOW_PARTICIPATION_REASON, false, true);
         continue;
       }
-      if (type === "omb" && event.status === "waiting" && schedule.startsAt && now >= new Date(schedule.startsAt.getTime() + 5 * 60_000) && !event.roomId) {
-        await cancelCompetition(type, event.id, "Room details were not submitted in time.", true);
+      if (type === "omb" && eventRecord.status === "waiting" && schedule.startsAt && now >= new Date(schedule.startsAt.getTime() + 5 * 60_000) && !(eventRecord as Match).roomId) {
+        await cancelCompetition(type, eventRecord.id, "Room details were not submitted in time.", true);
         continue;
       }
-      const deadline = resultDeadline(schedule);
-      if (deadline && ["waiting", "room_available", "ongoing", "result_pending"].includes(event.status) && now >= new Date(deadline.getTime() + 5 * 60_000)) {
-        await cancelCompetition(type, event.id, "Results were not submitted in time.", true);
+      if (
+        type === "omb" &&
+        eventRecord.status === "waiting" &&
+        schedule.startsAt &&
+        now >= new Date(schedule.startsAt.getTime() - (schedule.roomRevealMinutesBeforeStart ?? 0) * 60_000 + 3 * 60_000) &&
+        !(eventRecord as Match).roomId &&
+        (eventRecord as Match).managerRoomTimeoutAlertedAt == null
+      ) {
+        await db
+          .update(matchesTable)
+          .set({ managerRoomTimeoutAlertedAt: new Date(now) })
+          .where(and(eq(matchesTable.id, eventRecord.id), isNull(matchesTable.managerRoomTimeoutAlertedAt)));
+        logger.warn({ event: "competition.room_timeout", competitionId: eventRecord.id, type }, "Host has not uploaded room details.");
+      }
+      const deadline =
+        type === "tournament" && (eventRecord as Tournament).endsAt
+          ? new Date((eventRecord as Tournament).endsAt!.getTime() + schedule.resultDeadlineMinutes * 60_000)
+          : resultDeadline(schedule);
+      if (
+        deadline &&
+        now >= new Date(deadline.getTime() + 3 * 60_000) &&
+        now < new Date(deadline.getTime() + 5 * 60_000) &&
+        eventRecord.managerResultTimeoutAlertedAt == null &&
+        ["waiting", "room_available", "ongoing", "result_pending"].includes(eventRecord.status)
+      ) {
+        if (type === "omb") {
+          await db
+            .update(matchesTable)
+            .set({ managerResultTimeoutAlertedAt: new Date(now) })
+            .where(and(eq(matchesTable.id, eventRecord.id), isNull(matchesTable.managerResultTimeoutAlertedAt)));
+        } else {
+          await db
+            .update(tournamentsTable)
+            .set({ managerResultTimeoutAlertedAt: new Date(now) })
+            .where(and(eq(tournamentsTable.id, eventRecord.id), isNull(tournamentsTable.managerResultTimeoutAlertedAt)));
+        }
+        logger.warn({ event: "competition.result_timeout", competitionId: eventRecord.id, type }, "Host has not submitted results.");
+      }
+      if (deadline && ["waiting", "room_available", "ongoing", "result_pending"].includes(eventRecord.status) && now >= new Date(deadline.getTime() + 5 * 60_000)) {
+        await cancelCompetition(type, eventRecord.id, "Results were not submitted in time.", true);
       }
     }
   }

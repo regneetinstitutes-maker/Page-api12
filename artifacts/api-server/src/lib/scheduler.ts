@@ -46,6 +46,7 @@ import { runWithdrawalHealthChecks } from "./health";
 import { reconcilePendingDeposits } from "./deposit-reconciliation";
 import { resolvePayoutProvider } from "./payout/provider";
 import type { PayoutProvider } from "./payout/provider";
+import { runCompetitionScheduler } from "./competition";
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,7 @@ const DEFAULT_SUBMISSION_INTERVAL_MS = 30_000;                   // 30 seconds
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 5 * 60_000;           // 5 minutes
 const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 10 * 60_000;            // 10 minutes
 const DEFAULT_DEPOSIT_RECONCILIATION_INTERVAL_MS = 5 * 60_000;   // 5 minutes
+const DEFAULT_COMPETITION_INTERVAL_MS = 30_000;                  // 30 seconds
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -62,6 +64,7 @@ export interface SchedulerOptions {
   reconciliationIntervalMs?: number;
   healthCheckIntervalMs?: number;
   depositReconciliationIntervalMs?: number;
+  competitionIntervalMs?: number;
 }
 
 export interface SchedulerHandles {
@@ -84,6 +87,7 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
     reconciliationIntervalMs = DEFAULT_RECONCILIATION_INTERVAL_MS,
     healthCheckIntervalMs = DEFAULT_HEALTH_CHECK_INTERVAL_MS,
     depositReconciliationIntervalMs = DEFAULT_DEPOSIT_RECONCILIATION_INTERVAL_MS,
+    competitionIntervalMs = DEFAULT_COMPETITION_INTERVAL_MS,
   } = options;
 
   logger.info(
@@ -93,6 +97,7 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
       reconciliationIntervalMs,
       healthCheckIntervalMs,
       depositReconciliationIntervalMs,
+      competitionIntervalMs,
     },
     "Scheduler: background jobs starting.",
   );
@@ -145,11 +150,24 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
     }
   }, depositReconciliationIntervalMs);
 
+  const competitionTimer = setInterval(async () => {
+    logger.debug("Scheduler: running competition lifecycle job.");
+    try {
+      await runCompetitionScheduler();
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Scheduler: unexpected error in competition lifecycle job.",
+      );
+    }
+  }, competitionIntervalMs);
+
   // Allow the process to exit even if timers are still pending.
   submissionTimer.unref();
   reconciliationTimer.unref();
   healthTimer.unref();
   depositReconciliationTimer.unref();
+  competitionTimer.unref();
 
   return {
     stop() {
@@ -157,6 +175,7 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
       clearInterval(reconciliationTimer);
       clearInterval(healthTimer);
       clearInterval(depositReconciliationTimer);
+      clearInterval(competitionTimer);
       logger.info("Scheduler: background jobs stopped.");
     },
   };
@@ -188,6 +207,8 @@ export function startScheduler(): SchedulerHandles | null {
   const depositReconciliationIntervalMs =
     Number(process.env["DEPOSIT_RECONCILIATION_JOB_INTERVAL_MS"]) ||
     DEFAULT_DEPOSIT_RECONCILIATION_INTERVAL_MS;
+  const competitionIntervalMs =
+    Number(process.env["COMPETITION_JOB_INTERVAL_MS"]) || DEFAULT_COMPETITION_INTERVAL_MS;
 
   return createScheduler({
     provider,
@@ -195,5 +216,6 @@ export function startScheduler(): SchedulerHandles | null {
     reconciliationIntervalMs,
     healthCheckIntervalMs,
     depositReconciliationIntervalMs,
+    competitionIntervalMs,
   });
 }

@@ -35,10 +35,15 @@ vi.mock("./deposit-reconciliation", () => ({
   reconcilePendingDeposits: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./competition", () => ({
+  runCompetitionScheduler: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { submitPendingWithdrawals } from "./withdrawal-submission";
 import { reconcileProcessingWithdrawals } from "./withdrawal-reconciliation";
 import { runWithdrawalHealthChecks } from "./health";
 import { reconcilePendingDeposits } from "./deposit-reconciliation";
+import { runCompetitionScheduler } from "./competition";
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -139,6 +144,21 @@ describe("createScheduler", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(reconcilePendingDeposits).toHaveBeenCalledTimes(2);
 
+    scheduler.stop();
+  });
+
+  it("calls the competition lifecycle job on its configured interval", async () => {
+    const scheduler = createScheduler({
+      provider,
+      submissionIntervalMs: 60_000,
+      reconciliationIntervalMs: 60_000,
+      healthCheckIntervalMs: 600_000,
+      competitionIntervalMs: 2_000,
+    });
+
+    expect(runCompetitionScheduler).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(runCompetitionScheduler).toHaveBeenCalledTimes(1);
     scheduler.stop();
   });
 

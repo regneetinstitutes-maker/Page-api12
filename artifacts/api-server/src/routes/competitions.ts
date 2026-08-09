@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
-import { CompetitionError, LOW_PARTICIPATION_REASON, addRoomDetails, cancelCompetition, claimCompetition, confirmRoomParticipant, createGame, createMode, createSchedule, getAvailableCompetitions, getCompetition, joinCompetition, listGames, listHosts, listModes, listSchedules, releaseCompetition, runCompetitionScheduler, submitOmbResults } from "../lib/competition";
+import { CompetitionError, LOW_PARTICIPATION_REASON, addRoomDetails, cancelCompetition, claimCompetition, confirmRoomParticipant, createGame, createMode, createSchedule, createTournamentPositionReveal, getAvailableCompetitions, getCompetition, getTournamentParticipantList, joinCompetition, listGames, listHosts, listModes, listSchedules, releaseCompetition, runCompetitionScheduler, snoozeCompetitionUnclaimedAlert, startTournament, submitOmbResults, submitTournamentPositionReveal, submitTournamentResults } from "../lib/competition";
 import { requireRole, requireSession } from "../middlewares/requireSession";
 
 const router: IRouter = Router();
@@ -173,6 +173,94 @@ router.post("/competitions/omb/:id/results", requireSession, requireRole("omb_ho
   }
 });
 
+router.post("/competitions/tournament/:id/start", requireSession, requireRole("tournament_host"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const body = z.object({
+    values: z.array(z.object({
+      participantId: z.string().uuid(),
+      initialValue: z.number().int(),
+    })).min(1),
+  }).safeParse(req.body);
+  if (!id.success || !body.success) {
+    res.status(400).json({ message: "A valid initial value is required for every participant." });
+    return;
+  }
+  try {
+    res.json({ competition: await startTournament(id.data, req.user!.id, body.data.values) });
+  } catch (error) {
+    if (sendCompetitionError(res, error)) return;
+    throw error;
+  }
+});
+
+router.post("/competitions/tournament/:id/results", requireSession, requireRole("tournament_host"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const body = z.object({
+    values: z.array(z.object({
+      participantId: z.string().uuid(),
+      finalValue: z.number().int(),
+      isCheater: z.boolean().optional(),
+    })).min(1),
+  }).safeParse(req.body);
+  if (!id.success || !body.success) {
+    res.status(400).json({ message: "A valid final value is required for every participant." });
+    return;
+  }
+  try {
+    res.json({ competition: await submitTournamentResults(id.data, req.user!.id, body.data.values) });
+  } catch (error) {
+    if (sendCompetitionError(res, error)) return;
+    throw error;
+  }
+});
+
+router.get("/competitions/tournament/:id/participants", requireSession, async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  if (!id.success) {
+    res.status(400).json({ message: "Invalid tournament identifier." });
+    return;
+  }
+  try {
+    const result = await getTournamentParticipantList(id.data);
+    if (!result) {
+      res.status(404).json({ message: "Tournament was not found." });
+      return;
+    }
+    res.json(result);
+  } catch (error) {
+    if (sendCompetitionError(res, error)) return;
+    throw error;
+  }
+});
+
+router.post("/competitions/tournament/:id/position-reveals/:revealId", requireSession, requireRole("tournament_host"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const revealId = z.string().uuid().safeParse(req.params.revealId);
+  const body = z.object({
+    values: z.array(z.object({
+      participantId: z.string().uuid(),
+      metricValue: z.number().int(),
+    })).min(1),
+  }).safeParse(req.body);
+  if (!id.success || !revealId.success || !body.success) {
+    res.status(400).json({ message: "A valid metric value is required for every participant." });
+    return;
+  }
+  try {
+    res.json({
+      reveal: await submitTournamentPositionReveal(
+        id.data,
+        revealId.data,
+        req.user!.id,
+        body.data.values,
+      ),
+    });
+  } catch (error) {
+    if (sendCompetitionError(res, error)) return;
+    throw error;
+  }
+});
+
 router.get("/hosts", requireSession, requireRole("admin", "manager"), async (req, res) => {
   const parsed = z.object({ role: z.enum(["omb", "tournament"]).optional(), free: z.coerce.boolean().optional() }).safeParse(req.query);
   if (!parsed.success) {
@@ -180,6 +268,24 @@ router.get("/hosts", requireSession, requireRole("admin", "manager"), async (req
     return;
   }
   res.json({ hosts: await listHosts(parsed.data.role, parsed.data.free ?? false) });
+});
+
+router.post("/manager/competitions/:type/:id/unclaimed-snooze", requireSession, requireRole("manager"), async (req, res) => {
+  const type = competitionType.safeParse(req.params.type);
+  const id = z.string().uuid().safeParse(req.params.id);
+  const body = z.object({ minutes: z.number().int().min(1).max(60) }).safeParse(req.body);
+  if (!type.success || !id.success || !body.success) {
+    res.status(400).json({ message: "A snooze duration from 1 to 60 minutes is required." });
+    return;
+  }
+  try {
+    res.json({
+      competition: await snoozeCompetitionUnclaimedAlert(type.data, id.data, body.data.minutes),
+    });
+  } catch (error) {
+    if (sendCompetitionError(res, error)) return;
+    throw error;
+  }
 });
 
 router.post("/admin/competition/games", requireSession, requireRole("admin"), async (req, res) => {
@@ -230,7 +336,35 @@ router.post("/admin/competition/schedules", requireSession, requireRole("admin")
     res.status(400).json({ message: parsed.error.message });
     return;
   }
-  res.status(201).json({ schedule: await createSchedule(parsed.data) });
+  res.status(201).json({
+    schedule: await createSchedule({
+      ...parsed.data,
+      startsAt: parsed.data.startsAt ?? null,
+      entryClosesAt: parsed.data.entryClosesAt ?? null,
+      durationMinutes: parsed.data.durationMinutes ?? null,
+      roomRevealMinutesBeforeStart: parsed.data.roomRevealMinutesBeforeStart ?? null,
+      tournamentMetric: parsed.data.tournamentMetric ?? null,
+      guideVideoUrl: parsed.data.guideVideoUrl ?? null,
+      notes: parsed.data.notes ?? null,
+    }),
+  });
+});
+
+router.post("/admin/competition/tournament-position-reveals", requireSession, requireRole("admin"), async (req, res) => {
+  const parsed = z.object({
+    scheduleId: z.string().uuid(),
+    revealAt: z.coerce.date(),
+  }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: parsed.error.message });
+    return;
+  }
+  try {
+    res.status(201).json({ reveal: await createTournamentPositionReveal(parsed.data) });
+  } catch (error) {
+    if (sendCompetitionError(res, error)) return;
+    throw error;
+  }
 });
 
 router.post("/internal/competition-scheduler", requireSession, requireRole("admin"), async (_req, res) => {

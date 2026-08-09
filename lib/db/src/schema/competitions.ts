@@ -190,6 +190,7 @@ export const matchesTable = pgTable(
     screenshotContentType: text("screenshot_content_type"),
     voiceNoteObjectKey: text("voice_note_object_key"),
     managerUnclaimedAlertedAt: timestamp("manager_unclaimed_alerted_at", { withTimezone: true }),
+    managerUnclaimedSnoozedUntil: timestamp("manager_unclaimed_snoozed_until", { withTimezone: true }),
     managerRoomTimeoutAlertedAt: timestamp("manager_room_timeout_alerted_at", { withTimezone: true }),
     managerResultTimeoutAlertedAt: timestamp("manager_result_timeout_alerted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -249,12 +250,15 @@ export const tournamentsTable = pgTable(
     hostId: uuid("host_id").references(() => hostsTable.id, { onDelete: "set null" }),
     status: competitionStatusEnum("status").notNull().default("waiting"),
     entryClosesAt: timestamp("entry_closes_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    endsAt: timestamp("ends_at", { withTimezone: true }),
     hostClaimedAt: timestamp("host_claimed_at", { withTimezone: true }),
     resultSubmittedAt: timestamp("result_submitted_at", { withTimezone: true }),
     cancellationReason: text("cancellation_reason"),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     voiceNoteObjectKey: text("voice_note_object_key"),
     managerUnclaimedAlertedAt: timestamp("manager_unclaimed_alerted_at", { withTimezone: true }),
+    managerUnclaimedSnoozedUntil: timestamp("manager_unclaimed_snoozed_until", { withTimezone: true }),
     managerResultTimeoutAlertedAt: timestamp("manager_result_timeout_alerted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -308,6 +312,34 @@ export const tournamentParticipantsTable = pgTable(
       table.gameUid,
     ),
     index("competition_tournament_participants_user_joined_idx").on(table.userId, table.joinedAt),
+  ],
+);
+
+export const tournamentPositionValuesTable = pgTable(
+  "tournament_position_values",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    revealId: uuid("reveal_id")
+      .notNull()
+      .references(() => tournamentPositionRevealsTable.id, { onDelete: "cascade" }),
+    tournamentId: uuid("tournament_id")
+      .notNull()
+      .references(() => tournamentsTable.id, { onDelete: "cascade" }),
+    participantId: uuid("participant_id")
+      .notNull()
+      .references(() => tournamentParticipantsTable.id, { onDelete: "cascade" }),
+    metricValue: integer("metric_value").notNull(),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("tournament_position_values_reveal_participant_unique").on(
+      table.revealId,
+      table.participantId,
+    ),
+    index("tournament_position_values_tournament_reveal_idx").on(
+      table.tournamentId,
+      table.revealId,
+    ),
   ],
 );
 
