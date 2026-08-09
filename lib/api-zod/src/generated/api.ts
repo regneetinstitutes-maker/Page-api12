@@ -626,3 +626,52 @@ export const CancelWithdrawalResponse = zod.object({
 })
 
 
+export const searchUserByMobileQueryMobileNumberMin = 5;
+export const searchUserByMobileQueryMobileNumberMax = 32;
+
+
+
+export const SearchUserByMobileQueryParams = zod.object({
+  "mobileNumber": zod.coerce.string().min(searchUserByMobileQueryMobileNumberMin).max(searchUserByMobileQueryMobileNumberMax)
+})
+
+export const SearchUserByMobileResponse = zod.unknown()
+
+
+export const searchCompetitionQueryIdentifierMax = 128;
+
+
+
+export const SearchCompetitionQueryParams = zod.object({
+  "identifier": zod.coerce.string().min(1).max(searchCompetitionQueryIdentifierMax)
+})
+
+export const SearchCompetitionResponse = zod.unknown()
+
+
+export const UpdateUserAccountStatusParams = zod.object({
+  "id": zod.coerce.string().uuid()
+})
+
+export const UpdateUserAccountStatusBody = zod.object({
+  "accountStatus": zod.enum(['active', 'suspended', 'deactivated'])
+})
+
+export const UpdateUserAccountStatusResponse = zod.unknown()
+
+
+export const RegisterPushDeviceBody = zod.object({
+  "token": zod.string(),
+  "platform": zod.enum(['ios', 'android', 'web'])
+})
+
+export const RegisterPushDeviceResponse = zod.void()
+
+
+export const DeactivatePushDeviceParams = zod.object({
+  "id": zod.coerce.string().uuid()
+})
+
+export const DeactivatePushDeviceResponse = zod.void()
+
+

@@ -459,3 +459,46 @@ limit?: number;
 before?: string;
 };
 
+export type SearchUserByMobileParams = {
+/**
+ * @minLength 5
+ * @maxLength 32
+ */
+mobileNumber: string;
+};
+
+export type SearchCompetitionParams = {
+/**
+ * @minLength 1
+ * @maxLength 128
+ */
+identifier: string;
+};
+
+export type UpdateUserAccountStatusBodyAccountStatus = typeof UpdateUserAccountStatusBodyAccountStatus[keyof typeof UpdateUserAccountStatusBodyAccountStatus];
+
+
+export const UpdateUserAccountStatusBodyAccountStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  deactivated: 'deactivated',
+} as const;
+
+export type UpdateUserAccountStatusBody = {
+  accountStatus: UpdateUserAccountStatusBodyAccountStatus;
+};
+
+export type RegisterPushDeviceBodyPlatform = typeof RegisterPushDeviceBodyPlatform[keyof typeof RegisterPushDeviceBodyPlatform];
+
+
+export const RegisterPushDeviceBodyPlatform = {
+  ios: 'ios',
+  android: 'android',
+  web: 'web',
+} as const;
+
+export type RegisterPushDeviceBody = {
+  token: string;
+  platform: RegisterPushDeviceBodyPlatform;
+};
+

@@ -40,6 +40,7 @@ import {
   InsufficientAvailableBalanceError,
 } from "../lib/withdrawal";
 import type { Withdrawal } from "@workspace/db";
+import { decryptBankAccountNumber } from "../lib/bank-account-crypto";
 
 const router: IRouter = Router();
 
@@ -67,7 +68,7 @@ function toWithdrawalResponse(w: Withdrawal) {
     snapshotAccountHolderName: w.snapshotAccountHolderName,
     /** Masked: only last 4 digits of the bank account number. Null for UPI withdrawals. */
     snapshotBankAccountNumberMasked: w.snapshotBankAccountNumber
-      ? maskAccountNumber(w.snapshotBankAccountNumber)
+      ? maskAccountNumber(decryptBankAccountNumber(w.snapshotBankAccountNumber))
       : null,
     snapshotBankIfscCode: w.snapshotBankIfscCode ?? null,
     snapshotBankName: w.snapshotBankName ?? null,

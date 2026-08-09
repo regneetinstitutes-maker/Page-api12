@@ -46,6 +46,7 @@ import {
   withdrawalsTable,
   type UserBankAccount,
 } from "@workspace/db";
+import { decryptBankAccountNumber, encryptBankAccountNumber } from "./bank-account-crypto";
 
 // ── Error types ───────────────────────────────────────────────────────────────
 
@@ -130,7 +131,7 @@ export async function addBankAccount(
   const methodValues =
     input.method === "bank_transfer"
       ? {
-          bankAccountNumber: input.bankAccountNumber.trim(),
+          bankAccountNumber: encryptBankAccountNumber(input.bankAccountNumber.trim()),
           bankIfscCode: input.bankIfscCode.trim().toUpperCase(),
           bankName: input.bankName?.trim() || null,
         }
@@ -147,14 +148,16 @@ export async function addBankAccount(
     throw new Error("Failed to insert payout account after insert.");
   }
 
-  return account;
+  return account.bankAccountNumber
+    ? { ...account, bankAccountNumber: decryptBankAccountNumber(account.bankAccountNumber) }
+    : account;
 }
 
 /**
  * Returns all non-deleted payout accounts belonging to the user, oldest first.
  */
 export async function getUserBankAccounts(userId: string): Promise<UserBankAccount[]> {
-  return db
+  const accounts = await db
     .select()
     .from(userBankAccountsTable)
     .where(
@@ -164,6 +167,9 @@ export async function getUserBankAccounts(userId: string): Promise<UserBankAccou
       ),
     )
     .orderBy(userBankAccountsTable.createdAt);
+  return accounts.map((account) => account.bankAccountNumber
+    ? { ...account, bankAccountNumber: decryptBankAccountNumber(account.bankAccountNumber) }
+    : account);
 }
 
 /**
@@ -187,7 +193,10 @@ export async function getBankAccount(
     )
     .limit(1);
 
-  return account ?? null;
+  if (!account) return null;
+  return account.bankAccountNumber
+    ? { ...account, bankAccountNumber: decryptBankAccountNumber(account.bankAccountNumber) }
+    : account;
 }
 
 /**

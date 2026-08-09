@@ -8,6 +8,8 @@ import paymentsRouter from "./payments";
 import bankAccountsRouter from "./bank-accounts";
 import withdrawalsRouter from "./withdrawals";
 import competitionsRouter from "./competitions";
+import operationsRouter from "./operations";
+import notificationsRouter from "./notifications";
 
 const router: IRouter = Router();
 
@@ -20,5 +22,7 @@ router.use(paymentsRouter);
 router.use(bankAccountsRouter);
 router.use(withdrawalsRouter);
 router.use(competitionsRouter);
+router.use(operationsRouter);
+router.use(notificationsRouter);
 
 export default router;

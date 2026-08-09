@@ -68,6 +68,7 @@ import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { db, withdrawalsTable, type Withdrawal } from "@workspace/db";
 import { logger } from "./logger";
 import { notifyWithdrawalFailed } from "./notifications";
+import { decryptBankAccountNumber } from "./bank-account-crypto";
 import type { WithdrawalFailedPayload } from "./notifications";
 import { failWithdrawal } from "./withdrawal-completion";
 import type { PayoutProvider, SubmitPayoutInput, SubmitPayoutResult } from "./payout/provider";
@@ -115,7 +116,7 @@ function buildSubmitPayoutInput(w: Withdrawal, idempotencyKey: string): SubmitPa
       method: "bank_transfer",
       // Non-null assertion is safe: service layer guarantees these fields are set
       // for bank_transfer withdrawals at initiation time.
-      bankAccountNumber: w.snapshotBankAccountNumber!,
+      bankAccountNumber: decryptBankAccountNumber(w.snapshotBankAccountNumber!),
       bankIfscCode: w.snapshotBankIfscCode!,
     };
   }

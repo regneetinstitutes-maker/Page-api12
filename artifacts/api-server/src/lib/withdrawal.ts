@@ -46,6 +46,7 @@ import {
   type Withdrawal,
 } from "@workspace/db";
 import { createReservation, releaseReservation } from "./reservation";
+import { decryptBankAccountNumber, encryptBankAccountNumber } from "./bank-account-crypto";
 import { InsufficientAvailableBalanceError } from "./wallet";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -281,7 +282,7 @@ export async function initiateWithdrawal(
   const snapshotMethodFields =
     payoutAccount.method === "bank_transfer"
       ? {
-          snapshotBankAccountNumber: payoutAccount.bankAccountNumber ?? null,
+          snapshotBankAccountNumber: payoutAccount.bankAccountNumber ? encryptBankAccountNumber(decryptBankAccountNumber(payoutAccount.bankAccountNumber)) : null,
           snapshotBankIfscCode: payoutAccount.bankIfscCode ?? null,
           snapshotBankName: payoutAccount.bankName ?? null,
           snapshotUpiId: null,

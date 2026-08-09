@@ -7,3 +7,4 @@ export * from "./reservations";
 export * from "./bank-accounts";
 export * from "./withdrawals";
 export * from "./competitions";
+export * from "./push-devices";

@@ -47,6 +47,7 @@ import { reconcilePendingDeposits } from "./deposit-reconciliation";
 import { resolvePayoutProvider } from "./payout/provider";
 import type { PayoutProvider } from "./payout/provider";
 import { runCompetitionScheduler } from "./competition";
+import { withDatabaseAdvisoryLock } from "./db-lock";
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -105,7 +106,7 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
   const submissionTimer = setInterval(async () => {
     logger.debug("Scheduler: running submission job.");
     try {
-      await submitPendingWithdrawals(provider);
+      await withDatabaseAdvisoryLock("withdrawal-submission", () => submitPendingWithdrawals(provider));
     } catch (err) {
       logger.error(
         { err: err instanceof Error ? err.message : String(err) },
@@ -117,7 +118,7 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
   const reconciliationTimer = setInterval(async () => {
     logger.debug("Scheduler: running reconciliation job.");
     try {
-      await reconcileProcessingWithdrawals(provider);
+      await withDatabaseAdvisoryLock("withdrawal-reconciliation", () => reconcileProcessingWithdrawals(provider));
     } catch (err) {
       logger.error(
         { err: err instanceof Error ? err.message : String(err) },
@@ -129,7 +130,7 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
   const healthTimer = setInterval(async () => {
     logger.debug("Scheduler: running health checks.");
     try {
-      await runWithdrawalHealthChecks();
+      await withDatabaseAdvisoryLock("withdrawal-health", () => runWithdrawalHealthChecks());
     } catch (err) {
       logger.error(
         { err: err instanceof Error ? err.message : String(err) },
@@ -141,7 +142,7 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
   const depositReconciliationTimer = setInterval(async () => {
     logger.debug("Scheduler: running deposit reconciliation job.");
     try {
-      await reconcilePendingDeposits();
+      await withDatabaseAdvisoryLock("deposit-reconciliation", () => reconcilePendingDeposits());
     } catch (err) {
       logger.error(
         { err: err instanceof Error ? err.message : String(err) },
@@ -153,7 +154,7 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
   const competitionTimer = setInterval(async () => {
     logger.debug("Scheduler: running competition lifecycle job.");
     try {
-      await runCompetitionScheduler();
+      await withDatabaseAdvisoryLock("competition-lifecycle", () => runCompetitionScheduler());
     } catch (err) {
       logger.error(
         { err: err instanceof Error ? err.message : String(err) },

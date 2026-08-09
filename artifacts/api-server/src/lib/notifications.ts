@@ -20,6 +20,36 @@
  */
 
 import { logger } from "./logger";
+import { and, eq } from "drizzle-orm";
+import { db, pushDevicesTable } from "@workspace/db";
+
+export interface PushNotification {
+  userId: string;
+  title: string;
+  body: string;
+  data?: Record<string, string>;
+}
+
+async function deliverPush(notification: PushNotification): Promise<void> {
+  const endpoint = process.env.PUSH_PROVIDER_URL;
+  if (!endpoint) {
+    logger.warn({ event: "push.not_configured", userId: notification.userId }, "Push provider is not configured.");
+    return;
+  }
+  const devices = await db.select({ token: pushDevicesTable.token }).from(pushDevicesTable).where(and(eq(pushDevicesTable.userId, notification.userId), eq(pushDevicesTable.isActive, true)));
+  await Promise.all(devices.map(async (device) => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(process.env.PUSH_PROVIDER_TOKEN ? { authorization: `Bearer ${process.env.PUSH_PROVIDER_TOKEN}` } : {}) },
+      body: JSON.stringify({ ...notification, token: device.token }),
+    });
+    if (!response.ok) throw new Error(`Push provider returned ${response.status}.`);
+  }));
+}
+
+export function notifyPush(notification: PushNotification): void {
+  void deliverPush(notification).catch((error) => logger.error({ event: "push.delivery_failed", userId: notification.userId, error: error instanceof Error ? error.message : String(error) }, "Push notification delivery failed."));
+}
 
 // ── Withdrawal notifications ──────────────────────────────────────────────────
 

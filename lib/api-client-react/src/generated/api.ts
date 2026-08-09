@@ -37,9 +37,13 @@ import type {
   InitiateWithdrawalInput,
   LoginInput,
   PayoutAccount,
+  RegisterPushDeviceBody,
+  SearchCompetitionParams,
+  SearchUserByMobileParams,
   SignupInput,
   SubmitMobileNumberInput,
   UpdateEmailInput,
+  UpdateUserAccountStatusBody,
   User,
   VerifyMobileNumberInput,
   WalletBalance,
@@ -1817,5 +1821,357 @@ export const useCancelWithdrawal = <TError = ErrorType<ErrorResponse>,
         TContext
       > => {
       return useMutation(getCancelWithdrawalMutationOptions(options));
+    }
+
+export const getSearchUserByMobileUrl = (params: SearchUserByMobileParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/operations/users/search?${stringifiedParams}` : `/api/operations/users/search`
+}
+
+export const searchUserByMobile = async (params: SearchUserByMobileParams, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getSearchUserByMobileUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getSearchUserByMobileQueryKey = (params?: SearchUserByMobileParams,) => {
+    return [
+    `/api/operations/users/search`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getSearchUserByMobileQueryOptions = <TData = Awaited<ReturnType<typeof searchUserByMobile>>, TError = ErrorType<void>>(params: SearchUserByMobileParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchUserByMobile>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSearchUserByMobileQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof searchUserByMobile>>> = ({ signal }) => searchUserByMobile(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof searchUserByMobile>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SearchUserByMobileQueryResult = NonNullable<Awaited<ReturnType<typeof searchUserByMobile>>>
+export type SearchUserByMobileQueryError = ErrorType<void>
+
+
+
+export function useSearchUserByMobile<TData = Awaited<ReturnType<typeof searchUserByMobile>>, TError = ErrorType<void>>(
+ params: SearchUserByMobileParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchUserByMobile>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSearchUserByMobileQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getSearchCompetitionUrl = (params: SearchCompetitionParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/operations/competitions/search?${stringifiedParams}` : `/api/operations/competitions/search`
+}
+
+export const searchCompetition = async (params: SearchCompetitionParams, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getSearchCompetitionUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getSearchCompetitionQueryKey = (params?: SearchCompetitionParams,) => {
+    return [
+    `/api/operations/competitions/search`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getSearchCompetitionQueryOptions = <TData = Awaited<ReturnType<typeof searchCompetition>>, TError = ErrorType<void>>(params: SearchCompetitionParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchCompetition>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSearchCompetitionQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof searchCompetition>>> = ({ signal }) => searchCompetition(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof searchCompetition>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SearchCompetitionQueryResult = NonNullable<Awaited<ReturnType<typeof searchCompetition>>>
+export type SearchCompetitionQueryError = ErrorType<void>
+
+
+
+export function useSearchCompetition<TData = Awaited<ReturnType<typeof searchCompetition>>, TError = ErrorType<void>>(
+ params: SearchCompetitionParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchCompetition>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSearchCompetitionQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getUpdateUserAccountStatusUrl = (id: string,) => {
+
+
+
+
+  return `/api/operations/users/${id}/status`
+}
+
+export const updateUserAccountStatus = async (id: string,
+    updateUserAccountStatusBody: UpdateUserAccountStatusBody, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getUpdateUserAccountStatusUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(updateUserAccountStatusBody)
+  }
+);}
+
+
+
+
+
+export const getUpdateUserAccountStatusMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateUserAccountStatus>>, TError,{id: string;data: BodyType<UpdateUserAccountStatusBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateUserAccountStatus>>, TError,{id: string;data: BodyType<UpdateUserAccountStatusBody>}, TContext> => {
+
+const mutationKey = ['updateUserAccountStatus'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateUserAccountStatus>>, {id: string;data: BodyType<UpdateUserAccountStatusBody>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateUserAccountStatus(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateUserAccountStatusMutationResult = NonNullable<Awaited<ReturnType<typeof updateUserAccountStatus>>>
+    export type UpdateUserAccountStatusMutationBody = BodyType<UpdateUserAccountStatusBody>
+    export type UpdateUserAccountStatusMutationError = ErrorType<void>
+
+    export const useUpdateUserAccountStatus = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateUserAccountStatus>>, TError,{id: string;data: BodyType<UpdateUserAccountStatusBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateUserAccountStatus>>,
+        TError,
+        {id: string;data: BodyType<UpdateUserAccountStatusBody>},
+        TContext
+      > => {
+      return useMutation(getUpdateUserAccountStatusMutationOptions(options));
+    }
+
+export const getRegisterPushDeviceUrl = () => {
+
+
+
+
+  return `/api/notifications/devices`
+}
+
+export const registerPushDevice = async (registerPushDeviceBody: RegisterPushDeviceBody, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getRegisterPushDeviceUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(registerPushDeviceBody)
+  }
+);}
+
+
+
+
+
+export const getRegisterPushDeviceMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof registerPushDevice>>, TError,{data: BodyType<RegisterPushDeviceBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof registerPushDevice>>, TError,{data: BodyType<RegisterPushDeviceBody>}, TContext> => {
+
+const mutationKey = ['registerPushDevice'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof registerPushDevice>>, {data: BodyType<RegisterPushDeviceBody>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  registerPushDevice(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RegisterPushDeviceMutationResult = NonNullable<Awaited<ReturnType<typeof registerPushDevice>>>
+    export type RegisterPushDeviceMutationBody = BodyType<RegisterPushDeviceBody>
+    export type RegisterPushDeviceMutationError = ErrorType<void>
+
+    export const useRegisterPushDevice = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof registerPushDevice>>, TError,{data: BodyType<RegisterPushDeviceBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof registerPushDevice>>,
+        TError,
+        {data: BodyType<RegisterPushDeviceBody>},
+        TContext
+      > => {
+      return useMutation(getRegisterPushDeviceMutationOptions(options));
+    }
+
+export const getDeactivatePushDeviceUrl = (id: string,) => {
+
+
+
+
+  return `/api/notifications/devices/${id}`
+}
+
+export const deactivatePushDevice = async (id: string, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getDeactivatePushDeviceUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeactivatePushDeviceMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deactivatePushDevice>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deactivatePushDevice>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['deactivatePushDevice'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deactivatePushDevice>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deactivatePushDevice(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeactivatePushDeviceMutationResult = NonNullable<Awaited<ReturnType<typeof deactivatePushDevice>>>
+
+    export type DeactivatePushDeviceMutationError = ErrorType<void>
+
+    export const useDeactivatePushDevice = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deactivatePushDevice>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deactivatePushDevice>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getDeactivatePushDeviceMutationOptions(options));
     }
 

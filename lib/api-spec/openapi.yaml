@@ -22,6 +22,12 @@ tags:
     description: Payout account (bank transfer & UPI) operations
   - name: withdrawals
     description: Withdrawal operations
+  - name: competitions
+    description: Competition lifecycle operations
+  - name: operations
+    description: Admin and support operations
+  - name: notifications
+    description: Push device registration operations
 paths:
   /healthz:
     get:
@@ -881,6 +887,90 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /operations/users/search:
+    get:
+      operationId: searchUserByMobile
+      tags: [operations]
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: mobileNumber
+          in: query
+          required: true
+          schema: { type: string, minLength: 5, maxLength: 32 }
+      responses:
+        "200": { description: User operational details }
+        "401": { description: Not authenticated }
+        "403": { description: Admin or Support role required }
+        "404": { description: User not found }
+
+  /operations/competitions/search:
+    get:
+      operationId: searchCompetition
+      tags: [operations]
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: identifier
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        "200": { description: Competition record and participants }
+        "401": { description: Not authenticated }
+        "403": { description: Admin or Support role required }
+        "404": { description: Competition not found }
+
+  /operations/users/{id}/status:
+    patch:
+      operationId: updateUserAccountStatus
+      tags: [operations]
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accountStatus]
+              properties:
+                accountStatus: { type: string, enum: [active, suspended, deactivated] }
+      responses:
+        "200": { description: Updated user }
+        "401": { description: Not authenticated }
+        "403": { description: Admin role required }
+
+  /notifications/devices:
+    post:
+      operationId: registerPushDevice
+      tags: [notifications]
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, platform]
+              properties:
+                token: { type: string }
+                platform: { type: string, enum: [ios, android, web] }
+      responses:
+        "201": { description: Device registered }
+        "400": { description: Validation error }
+        "401": { description: Not authenticated }
+
+  /notifications/devices/{id}:
+    delete:
+      operationId: deactivatePushDevice
+      tags: [notifications]
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Device deactivated }
+        "400": { description: Invalid device identifier }
 components:
   securitySchemes:
     sessionCookie:
