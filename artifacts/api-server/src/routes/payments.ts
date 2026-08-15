@@ -1,7 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
-import { db, withdrawalsTable, type Withdrawal } from "@workspace/db";
 import { logger } from "../lib/logger";
 import {
   verifyReverseHash,
@@ -10,9 +8,6 @@ import {
   DepositNotFoundError,
   DepositAlreadyCompletedError,
 } from "../lib/payu";
-import { completeWithdrawal, failWithdrawal } from "../lib/withdrawal-completion";
-import { notifyWithdrawalCompleted, notifyWithdrawalFailed } from "../lib/notifications";
-import { resolvePayoutProvider } from "../lib/payout/provider";
 
 const router: IRouter = Router();
 
@@ -168,115 +163,6 @@ router.post("/payments/payu/failure", async (req, res): Promise<void> => {
     }
     throw err;
   }
-});
-
-// ── POST /payments/payu/payout ────────────────────────────────────────────────
-//
-// PayU Transfer Money webhook callback. PayU POSTs here when a payout settles
-// (success or failure). The route verifies the webhook hash, resolves the
-// withdrawal, and calls completeWithdrawal or failWithdrawal.
-//
-// Audit trail: the provider's transferId from the webhook is stored in the
-// `webhook_transfer_id` column atomically within the same transaction as the
-// status update. This allows every completed withdrawal to be traced back to
-// a specific PayU payment ID.
-//
-// Idempotency: if the withdrawal is already in a terminal state (completed /
-// failed / cancelled), the webhook is silently accepted (200) so PayU stops
-// retrying.
-//
-// Always returns 200 to prevent PayU from retrying indefinitely.
-// The only exception is 400 for failed hash verification.
-
-router.post("/payments/payu/payout", async (req, res): Promise<void> => {
-  const provider = resolvePayoutProvider();
-
-  const event = provider.parseWebhook(
-    req.body as Record<string, unknown>,
-    req.headers as Record<string, string>,
-  );
-
-  if (!event) {
-    logger.warn("Payout webhook: rejected — invalid signature or malformed body.");
-    res.status(400).json({ message: "Webhook verification failed." });
-    return;
-  }
-
-  let completedWithdrawal: Withdrawal | null = null;
-  let failedWithdrawal: Withdrawal | null = null;
-
-  await db.transaction(async (tx) => {
-    const [withdrawal] = await tx
-      .select()
-      .from(withdrawalsTable)
-      .where(eq(withdrawalsTable.id, event.withdrawalId))
-      .for("update");
-
-    if (!withdrawal) {
-      logger.warn(
-        { withdrawalId: event.withdrawalId },
-        "Payout webhook: withdrawal not found; ignoring.",
-      );
-      return; // Will return 200 — do not reveal existence of withdrawal IDs.
-    }
-
-    // Idempotency guard: already in a terminal state — webhook already processed.
-    if (withdrawal.status !== "processing") {
-      logger.info(
-        { withdrawalId: event.withdrawalId, status: withdrawal.status },
-        "Payout webhook: withdrawal is not in 'processing' state; ignoring (already handled).",
-      );
-      return;
-    }
-
-    // Store the provider's transfer ID from this webhook for the audit trail.
-    // This creates a traceable link: withdrawal → PayU payment ID.
-    // Done atomically with the status update in this transaction.
-    await tx
-      .update(withdrawalsTable)
-      .set({ webhookTransferId: event.providerReference })
-      .where(eq(withdrawalsTable.id, event.withdrawalId));
-
-    if (event.outcome === "success") {
-      completedWithdrawal = await completeWithdrawal(tx, withdrawal);
-      logger.info(
-        {
-          withdrawalId: event.withdrawalId,
-          providerReference: event.providerReference,
-          webhookTransferId: event.providerReference,
-        },
-        "Payout webhook: withdrawal completed successfully.",
-      );
-    } else {
-      failedWithdrawal = await failWithdrawal(tx, withdrawal, event.reason);
-      logger.info(
-        {
-          withdrawalId: event.withdrawalId,
-          reason: event.reason,
-          webhookTransferId: event.providerReference,
-        },
-        "Payout webhook: withdrawal failed; reservation released.",
-      );
-    }
-  });
-
-  // Fire-and-forget notifications OUTSIDE the transaction.
-  // Notification failures must never affect the HTTP response to PayU.
-  if (completedWithdrawal) {
-    const w = completedWithdrawal as Withdrawal;
-    void notifyWithdrawalCompleted({ userId: w.userId, withdrawalId: w.id, amount: w.amount });
-  }
-  if (failedWithdrawal) {
-    const w = failedWithdrawal as Withdrawal;
-    void notifyWithdrawalFailed({
-      userId: w.userId,
-      withdrawalId: w.id,
-      amount: w.amount,
-      reason: w.failureReason ?? null,
-    });
-  }
-
-  res.status(200).json({ ok: true });
 });
 
 export default router;

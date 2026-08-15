@@ -1,21 +1,17 @@
 /**
  * Background job scheduler for payment processing.
  *
- * Runs four periodic jobs:
+ * Runs the periodic jobs that remain enabled for the PayU customer payment
+ * flow:
  *
- *   1. submitPendingWithdrawals  — picks up `reserved` withdrawals and
- *      submits them to the payout provider. Default: every 30 seconds.
- *
- *   2. reconcileProcessingWithdrawals — polls the provider for `processing`
- *      withdrawals that did not receive a webhook callback. Default: every
- *      5 minutes.
- *
- *   3. runWithdrawalHealthChecks — monitors for reserved_balance drift and
+ *   1. runWithdrawalHealthChecks — monitors for reserved_balance drift and
  *      stuck withdrawals. Default: every 10 minutes.
  *
- *   4. reconcilePendingDeposits — polls PayU for `pending` deposits that have
+ *   2. reconcilePendingDeposits — polls PayU for `pending` deposits that have
  *      been waiting longer than the staleness threshold (15 minutes) without
  *      receiving a webhook callback. Default: every 5 minutes.
+ *
+ *   3. runCompetitionScheduler — keeps competition lifecycle state current.
  *
  * ── Configuration ──────────────────────────────────────────────────────────
  *
@@ -40,19 +36,13 @@
  */
 
 import { logger } from "./logger";
-import { submitPendingWithdrawals } from "./withdrawal-submission";
-import { reconcileProcessingWithdrawals } from "./withdrawal-reconciliation";
 import { runWithdrawalHealthChecks } from "./health";
 import { reconcilePendingDeposits } from "./deposit-reconciliation";
-import { resolvePayoutProvider } from "./payout/provider";
-import type { PayoutProvider } from "./payout/provider";
 import { runCompetitionScheduler } from "./competition";
 import { withDatabaseAdvisoryLock } from "./db-lock";
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
 
-const DEFAULT_SUBMISSION_INTERVAL_MS = 30_000;                   // 30 seconds
-const DEFAULT_RECONCILIATION_INTERVAL_MS = 5 * 60_000;           // 5 minutes
 const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 10 * 60_000;            // 10 minutes
 const DEFAULT_DEPOSIT_RECONCILIATION_INTERVAL_MS = 5 * 60_000;   // 5 minutes
 const DEFAULT_COMPETITION_INTERVAL_MS = 30_000;                  // 30 seconds
@@ -60,7 +50,7 @@ const DEFAULT_COMPETITION_INTERVAL_MS = 30_000;                  // 30 seconds
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface SchedulerOptions {
-  provider: PayoutProvider;
+  provider?: unknown;
   submissionIntervalMs?: number;
   reconciliationIntervalMs?: number;
   healthCheckIntervalMs?: number;
@@ -83,9 +73,8 @@ export interface SchedulerHandles {
  */
 export function createScheduler(options: SchedulerOptions): SchedulerHandles {
   const {
-    provider,
-    submissionIntervalMs = DEFAULT_SUBMISSION_INTERVAL_MS,
-    reconciliationIntervalMs = DEFAULT_RECONCILIATION_INTERVAL_MS,
+    submissionIntervalMs: _submissionIntervalMs,
+    reconciliationIntervalMs: _reconciliationIntervalMs,
     healthCheckIntervalMs = DEFAULT_HEALTH_CHECK_INTERVAL_MS,
     depositReconciliationIntervalMs = DEFAULT_DEPOSIT_RECONCILIATION_INTERVAL_MS,
     competitionIntervalMs = DEFAULT_COMPETITION_INTERVAL_MS,
@@ -93,39 +82,12 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
 
   logger.info(
     {
-      provider: provider.name,
-      submissionIntervalMs,
-      reconciliationIntervalMs,
       healthCheckIntervalMs,
       depositReconciliationIntervalMs,
       competitionIntervalMs,
     },
     "Scheduler: background jobs starting.",
   );
-
-  const submissionTimer = setInterval(async () => {
-    logger.debug("Scheduler: running submission job.");
-    try {
-      await withDatabaseAdvisoryLock("withdrawal-submission", () => submitPendingWithdrawals(provider));
-    } catch (err) {
-      logger.error(
-        { err: err instanceof Error ? err.message : String(err) },
-        "Scheduler: unexpected error in submission job.",
-      );
-    }
-  }, submissionIntervalMs);
-
-  const reconciliationTimer = setInterval(async () => {
-    logger.debug("Scheduler: running reconciliation job.");
-    try {
-      await withDatabaseAdvisoryLock("withdrawal-reconciliation", () => reconcileProcessingWithdrawals(provider));
-    } catch (err) {
-      logger.error(
-        { err: err instanceof Error ? err.message : String(err) },
-        "Scheduler: unexpected error in reconciliation job.",
-      );
-    }
-  }, reconciliationIntervalMs);
 
   const healthTimer = setInterval(async () => {
     logger.debug("Scheduler: running health checks.");
@@ -164,16 +126,12 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
   }, competitionIntervalMs);
 
   // Allow the process to exit even if timers are still pending.
-  submissionTimer.unref();
-  reconciliationTimer.unref();
   healthTimer.unref();
   depositReconciliationTimer.unref();
   competitionTimer.unref();
 
   return {
     stop() {
-      clearInterval(submissionTimer);
-      clearInterval(reconciliationTimer);
       clearInterval(healthTimer);
       clearInterval(depositReconciliationTimer);
       clearInterval(competitionTimer);
@@ -185,8 +143,8 @@ export function createScheduler(options: SchedulerOptions): SchedulerHandles {
 // ── startScheduler ────────────────────────────────────────────────────────────
 
 /**
- * Reads configuration from environment variables, resolves the payout provider,
- * and starts the background jobs.
+ * Starts the non-payout background jobs that remain enabled for the customer
+ * payment flow.
  *
  * Returns null when NODE_ENV === 'test' so that importing index.ts in tests
  * does not start real timers.
@@ -197,12 +155,6 @@ export function startScheduler(): SchedulerHandles | null {
     return null;
   }
 
-  const provider = resolvePayoutProvider();
-
-  const submissionIntervalMs =
-    Number(process.env["SUBMISSION_JOB_INTERVAL_MS"]) || DEFAULT_SUBMISSION_INTERVAL_MS;
-  const reconciliationIntervalMs =
-    Number(process.env["RECONCILIATION_JOB_INTERVAL_MS"]) || DEFAULT_RECONCILIATION_INTERVAL_MS;
   const healthCheckIntervalMs =
     Number(process.env["HEALTH_CHECK_INTERVAL_MS"]) || DEFAULT_HEALTH_CHECK_INTERVAL_MS;
   const depositReconciliationIntervalMs =
@@ -212,9 +164,6 @@ export function startScheduler(): SchedulerHandles | null {
     Number(process.env["COMPETITION_JOB_INTERVAL_MS"]) || DEFAULT_COMPETITION_INTERVAL_MS;
 
   return createScheduler({
-    provider,
-    submissionIntervalMs,
-    reconciliationIntervalMs,
     healthCheckIntervalMs,
     depositReconciliationIntervalMs,
     competitionIntervalMs,

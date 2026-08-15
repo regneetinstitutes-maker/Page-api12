@@ -46,38 +46,6 @@ if (payuEnv !== "test" && payuEnv !== "production") {
   process.exit(1);
 }
 
-// ── PayU Payout startup validation ────────────────────────────────────────────
-// PAYU_PAYOUT_KEY and PAYU_PAYOUT_SALT are separate credentials used by the
-// PayU Transfer Money (Payouts) API. Required when PAYOUT_PROVIDER=payu
-// (the default). Only variable names are logged — secret values are never read
-// or printed here.
-
-const payoutProvider = process.env["PAYOUT_PROVIDER"] ?? "payu";
-
-if (payoutProvider === "payu") {
-  const PAYU_PAYOUT_REQUIRED = ["PAYU_PAYOUT_KEY", "PAYU_PAYOUT_SALT"] as const;
-  for (const varName of PAYU_PAYOUT_REQUIRED) {
-    if (!process.env[varName]) {
-      logger.fatal(
-        "PayU Payout configuration invalid.\n" +
-          `Missing environment variable: ${varName}\n` +
-          "Server startup aborted.",
-      );
-      process.exit(1);
-    }
-  }
-
-  const payuPayoutEnv = process.env["PAYU_PAYOUT_ENV"] ?? "test";
-  if (payuPayoutEnv !== "test" && payuPayoutEnv !== "production") {
-    logger.fatal(
-      "PayU Payout configuration invalid.\n" +
-        `PAYU_PAYOUT_ENV must be "test" or "production", got "${payuPayoutEnv}".\n` +
-        "Server startup aborted.",
-    );
-    process.exit(1);
-  }
-}
-
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 // Signal handlers are registered before listen() so they are in place even
 // if startup validation fails (though that exits immediately anyway).
