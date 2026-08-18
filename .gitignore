@@ -47,3 +47,52 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SECRETS & CREDENTIALS
+# ════════════════════════════════════════════════════════════════════════════════
+# NEVER commit files containing secrets to version control.
+# These files should only exist in local development or secure deployment systems.
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.save
+.env.*.save
+.env.*.bak
+.env.backup
+.env.development
+.env.production
+.env.test
+
+# AWS credentials and configuration
+.aws/
+aws-credentials
+
+# SSH keys and certificates
+*.pem
+*.key
+*.pub
+*.crt
+*.cert
+id_rsa
+id_rsa.pub
+id_dsa
+id_dsa.pub
+known_hosts
+
+# API keys and tokens
+*.token
+api-keys.json
+secrets.json
+credentials.json
+
+# IDE secrets
+.vscode/settings.json
+.idea/workspace.xml
+.idea/misc.xml
+
+# OS temporary files
+.DS_Store
+Thumbs.db
