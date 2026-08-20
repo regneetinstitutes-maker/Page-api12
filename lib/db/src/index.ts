@@ -1,4 +1,5 @@
 import { drizzle } from "drizzle-orm/node-postgres";
+import { readFileSync } from "node:fs";
 import pg from "pg";
 import * as schema from "./schema";
 
@@ -10,7 +11,18 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export function createPoolConfig(databaseUrl: string) {
+  const ssl = process.env.PGSSLROOTCERT
+    ? {
+        ca: readFileSync(process.env.PGSSLROOTCERT, "utf8"),
+        rejectUnauthorized: true,
+      }
+    : { rejectUnauthorized: true };
+
+  return { connectionString: databaseUrl, ssl };
+}
+
+export const pool = new Pool(createPoolConfig(process.env.DATABASE_URL));
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
