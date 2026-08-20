@@ -31,7 +31,7 @@ export function getPayUConfig(): {
   if (!surl) throw new Error("PAYU_SURL environment variable is required.");
   if (!furl) throw new Error("PAYU_FURL environment variable is required.");
 
-  return { key, salt, paymentUrl: PAYU_PAYMENT_URLS[env], surl, furl };
+  return { key, salt, paymentUrl: process.env["PAYU_URL"] ?? PAYU_PAYMENT_URLS[env], surl, furl };
 }
 
 // ── Hash ──────────────────────────────────────────────────────────────────────

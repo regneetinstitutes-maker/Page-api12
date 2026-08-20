@@ -10,16 +10,9 @@ Before deploying, ensure:
 
 1. **EC2 instance** is running (Ubuntu 24.04 or similar)
 2. **AWS Secrets Manager** contains the database secret at `pagewoga/prod/database`:
-   ```json
-   {
-     "engine": "postgresql",
-     "host": "pagewoga-db.cvm6yc6wit1b.ap-south-1.rds.amazonaws.com",
-     "port": 5432,
-     "dbname": "pagewoga-db",
-     "username": "postgres",
-     "password": "your-actual-password"
-   }
-   ```
+   The loader expects these key names: `host`, `port`, `database`, `username`,
+   `password`, `PAYU_KEY`, `PAYU_SALT`, `PAYU_SURL`, `PAYU_FURL`, and
+   `PAYU_URL`. `dbname` is accepted as a legacy alias for `database`.
 3. **EC2 IAM role** has permission to read the Secrets Manager secret
 4. **AWS RDS PostgreSQL** is running and network-accessible from EC2
 5. **Nginx** is installed and configured as a reverse proxy (listening on port 443 HTTPS)
@@ -50,11 +43,11 @@ sudo npm install -g pm2
 
 ```bash
 # Create the directory where the backend will run
-sudo mkdir -p /home/ec2-user/pagewoga
-sudo chown ec2-user:ec2-user /home/ec2-user/pagewoga
+sudo mkdir -p /home/ec2-user/Page-api12
+sudo chown ec2-user:ec2-user /home/ec2-user/Page-api12
 
 # Set proper permissions
-chmod 755 /home/ec2-user/pagewoga
+chmod 755 /home/ec2-user/Page-api12
 ```
 
 ---
@@ -66,7 +59,7 @@ Run these commands on EC2 after pulling the repository:
 ### 1. Navigate to the Application Directory
 
 ```bash
-cd /home/ec2-user/pagewoga
+cd /home/ec2-user/Page-api12
 ```
 
 ### 2. Pull/Update the Repository
@@ -94,7 +87,7 @@ pnpm install --frozen-lockfile
 ### 4. Build the Application
 
 ```bash
-pnpm run build
+pnpm --filter @workspace/api-server build
 ```
 
 **What this does:**
@@ -114,7 +107,7 @@ pm2 stop pagewoga-backend || true
 ### 6. Start with PM2
 
 ```bash
-pm2 start ecosystem.config.mjs
+pm2 start ecosystem.config.cjs
 ```
 
 **What this does:**

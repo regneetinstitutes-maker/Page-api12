@@ -16,20 +16,39 @@ import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-sec
 /**
  * Database secret structure expected from AWS Secrets Manager
  */
-interface DatabaseSecret {
-  engine: string;
+interface ProductionSecret {
+  engine?: string;
   host: string;
-  port: number;
-  dbname: string;
+  port: number | string;
+  database?: string;
+  dbname?: string;
   username: string;
   password: string;
+  PAYU_KEY: string;
+  PAYU_SALT: string;
+  PAYU_SURL: string;
+  PAYU_FURL: string;
+  PAYU_URL: string;
 }
+
+const REQUIRED_PAYU_FIELDS = [
+  "PAYU_KEY",
+  "PAYU_SALT",
+  "PAYU_SURL",
+  "PAYU_FURL",
+  "PAYU_URL",
+] as const;
 
 /**
  * Loads database credentials from AWS Secrets Manager (production)
  * or returns DATABASE_URL from environment (development).
  */
-async function loadDatabaseUrl(): Promise<string> {
+interface LoadedProductionConfig {
+  databaseUrl: string;
+  payu: Record<(typeof REQUIRED_PAYU_FIELDS)[number], string> | null;
+}
+
+async function loadProductionConfig(): Promise<LoadedProductionConfig> {
   const isProduction = process.env.NODE_ENV === "production";
 
   // Development: use DATABASE_URL from environment
@@ -41,7 +60,7 @@ async function loadDatabaseUrl(): Promise<string> {
         "Set it in .env or process.env.",
       );
     }
-    return databaseUrl;
+    return { databaseUrl, payu: null };
   }
 
   // Production: load from AWS Secrets Manager
@@ -61,26 +80,45 @@ async function loadDatabaseUrl(): Promise<string> {
       );
     }
 
-    const secret = JSON.parse(response.SecretString) as DatabaseSecret;
+    let secret: ProductionSecret;
+    try {
+      secret = JSON.parse(response.SecretString) as ProductionSecret;
+    } catch {
+      throw new Error("secret JSON is malformed");
+    }
 
-    // Validate required fields
-    if (!secret.host || !secret.port || !secret.dbname || !secret.username || !secret.password) {
+    const databaseName = secret.database || secret.dbname;
+    if (!secret.host || !secret.port || !databaseName || !secret.username || !secret.password) {
       throw new Error(
-        `Secret ${secretName} is missing required fields. ` +
-        "Expected: engine, host, port, dbname, username, password",
+        "database configuration is incomplete; expected host, port, database or dbname, username, and password",
       );
+    }
+
+    const missingPayUField = REQUIRED_PAYU_FIELDS.find((field) => !secret[field]);
+    if (missingPayUField) {
+      throw new Error(`PayU configuration is incomplete; missing ${missingPayUField}`);
+    }
+
+    const port = Number(secret.port);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+      throw new Error("database configuration has an invalid port");
     }
 
     // Construct DATABASE_URL from secret components
     // Handle special characters in password using percent-encoding
     const encodedPassword = encodeURIComponent(secret.password);
-    const databaseUrl = `postgresql://${secret.username}:${encodedPassword}@${secret.host}:${secret.port}/${secret.dbname}`;
+    const databaseUrl = `postgresql://${encodeURIComponent(secret.username)}:${encodedPassword}@${secret.host}:${port}/${encodeURIComponent(databaseName)}`;
 
-    return databaseUrl;
+    return {
+      databaseUrl,
+      payu: Object.fromEntries(
+        REQUIRED_PAYU_FIELDS.map((field) => [field, secret[field]]),
+      ) as LoadedProductionConfig["payu"],
+    };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : "unknown error";
     throw new Error(
-      `Failed to load database credentials from AWS Secrets Manager (${secretName}): ${message}`,
+      `Failed to load production configuration from AWS Secrets Manager (${secretName}): ${message}`,
     );
   }
 }
@@ -88,13 +126,18 @@ async function loadDatabaseUrl(): Promise<string> {
 /**
  * Initialize production secrets at startup.
  *
- * This function MUST be called before any module that uses DATABASE_URL.
- * Typically called in index.ts before importing the database module.
+ * This function must complete before importing any module that uses the
+ * database or PayU configuration.
  */
 export async function initializeSecrets(): Promise<void> {
   try {
-    const databaseUrl = await loadDatabaseUrl();
-    process.env.DATABASE_URL = databaseUrl;
+    const config = await loadProductionConfig();
+    process.env.DATABASE_URL = config.databaseUrl;
+    if (config.payu) {
+      for (const [field, value] of Object.entries(config.payu)) {
+        process.env[field] = value;
+      }
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Secrets initialization failed: ${message}`);
@@ -105,5 +148,6 @@ export async function initializeSecrets(): Promise<void> {
  * For testing: get the loaded database URL without modifying process.env
  */
 export async function getDatabaseUrl(): Promise<string> {
-  return loadDatabaseUrl();
+  const config = await loadProductionConfig();
+  return config.databaseUrl;
 }

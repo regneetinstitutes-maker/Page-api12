@@ -1,23 +1,20 @@
-import app from "./app";
 import { logger } from "./lib/logger";
-import { startScheduler } from "./lib/scheduler";
 import { initializeSecrets } from "./lib/secrets";
 
-/**
- * Application entry point with secrets initialization.
- * 
- * This IIFE ensures that DATABASE_URL is loaded from AWS Secrets Manager
- * (in production) before any module that imports the database is initialized.
- */
 (async () => {
   try {
-    // ── Initialize secrets ──────────────────────────────────────────────
-    // Must be first: loads DATABASE_URL from AWS Secrets Manager in production.
     if (process.env.NODE_ENV === "production") {
       logger.info("Secrets: loading from AWS Secrets Manager.");
       await initializeSecrets();
       logger.info("Secrets: successfully loaded from AWS Secrets Manager.");
     }
+
+    // These imports must remain after production secret initialization. Their
+    // transitive imports evaluate the database package immediately.
+    const [{ default: app }, { startScheduler }] = await Promise.all([
+      import("./app"),
+      import("./lib/scheduler"),
+    ]);
 
     // ── PORT ──────────────────────────────────────────────────────────────────────
 
