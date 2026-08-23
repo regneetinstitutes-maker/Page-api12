@@ -4,6 +4,9 @@ import { eq } from "drizzle-orm";
 import { db, userSessionsTable, type UserSession } from "@workspace/db";
 
 export const SESSION_COOKIE_NAME = "sid";
+const SESSION_COOKIE_DOMAIN = process.env.NODE_ENV === "production"
+  ? (process.env.COOKIE_DOMAIN ?? ".pagewoga.online")
+  : undefined;
 
 // Sliding expiration window: 6 months of inactivity. Any authenticated
 // request extends the session's expiry back out to this window (see
@@ -95,11 +98,12 @@ export function setSessionCookie(res: Response, token: string, expiresAt: Date):
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
+    domain: SESSION_COOKIE_DOMAIN,
     expires: expiresAt,
     path: "/",
   });
 }
 
 export function clearSessionCookie(res: Response): void {
-  res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
+  res.clearCookie(SESSION_COOKIE_NAME, { domain: SESSION_COOKIE_DOMAIN, path: "/" });
 }

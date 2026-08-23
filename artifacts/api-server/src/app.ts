@@ -26,9 +26,14 @@ app.use(
     },
   }),
 );
-const configuredOrigins = process.env.CORS_ORIGINS?.split(",").map((origin) => origin.trim()).filter(Boolean);
+const configuredOrigins = process.env.CORS_ORIGINS?.split(",").map((origin) => origin.trim()).filter(Boolean) ?? [];
+const allowedOrigins = [...new Set([
+  "https://pagewoga.online",
+  "https://admin.pagewoga.online",
+  ...configuredOrigins,
+])];
 app.use(cors({
-  origin: configuredOrigins?.length ? configuredOrigins : true,
+  origin: allowedOrigins,
   credentials: true,
 }));
 app.use(express.json({ limit: "1mb" }));
