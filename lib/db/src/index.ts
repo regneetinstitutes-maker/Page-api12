@@ -12,12 +12,22 @@ if (!process.env.DATABASE_URL) {
 }
 
 export function createPoolConfig(databaseUrl: string) {
-  const ssl = process.env.PGSSLROOTCERT
-    ? {
-        ca: readFileSync(process.env.PGSSLROOTCERT, "utf8"),
-        rejectUnauthorized: true,
-      }
-    : { rejectUnauthorized: true };
+  const ca = process.env.PGSSLROOTCERT_CONTENT
+    ?? (process.env.PGSSLROOTCERT
+      ? readFileSync(process.env.PGSSLROOTCERT, "utf8")
+      : undefined);
+
+  if (process.env.NODE_ENV === "production" && !ca) {
+    throw new Error(
+      "PGSSLROOTCERT or PGSSLROOTCERT_CONTENT must be set in production " +
+        "to verify the AWS RDS PostgreSQL certificate chain.",
+    );
+  }
+
+  const ssl = {
+    ...(ca ? { ca } : {}),
+    rejectUnauthorized: true,
+  };
 
   return { connectionString: databaseUrl, ssl };
 }

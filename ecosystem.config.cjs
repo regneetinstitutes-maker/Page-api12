@@ -16,6 +16,7 @@ module.exports = {
         NODE_ENV: "production",
         AWS_REGION: "ap-south-1",
         PORT: "3000",
+        PGSSLROOTCERT: "/etc/ssl/certs/rds-global-bundle.pem",
       },
       instances: 1,
       exec_mode: "fork",

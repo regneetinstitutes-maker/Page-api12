@@ -172,6 +172,7 @@ sudo systemctl reload nginx
 **In Production:**
 
 - **DATABASE_URL** is loaded automatically from AWS Secrets Manager at startup
+- **PGSSLROOTCERT** must point to the AWS RDS CA bundle installed on the EC2 host
 - All other required variables must be set either:
   - In the PM2 ecosystem configuration (`ecosystem.config.mjs`)
   - In EC2 environment variables
@@ -184,6 +185,7 @@ sudo systemctl reload nginx
 export PORT=3000
 export NODE_ENV=production
 export AWS_REGION=ap-south-1
+export PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem
 export CORS_ORIGINS=https://pagewoga.online,https://admin.pagewoga.online
 export S3_BUCKET=pagewoga-uploads
 export PAYU_KEY=your_payu_key
@@ -198,6 +200,25 @@ export BANK_ACCOUNT_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abc
 export PUSH_PROVIDER_URL=https://push-provider.example.com
 export FIREBASE_PROJECT_ID=your-firebase-project
 ```
+
+### AWS RDS PostgreSQL TLS
+
+Install the current AWS RDS CA bundle on EC2 and make it readable by the PM2
+process. The path below matches `ecosystem.config.cjs`:
+
+```bash
+sudo mkdir -p /etc/ssl/certs
+sudo curl --fail --location --output /etc/ssl/certs/rds-global-bundle.pem \
+  https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+sudo chmod 0644 /etc/ssl/certs/rds-global-bundle.pem
+```
+
+The backend passes this PEM bundle to the `pg` client as `ssl.ca` and always
+sets `rejectUnauthorized: true`. Do not set `NODE_TLS_REJECT_UNAUTHORIZED=0`
+or replace the CA with a self-signed certificate. If a deployment injects PEM
+content through an environment manager instead of a file, it may set
+`PGSSLROOTCERT_CONTENT`; production startup still requires one of these two
+verified CA sources.
 
 ---
 
