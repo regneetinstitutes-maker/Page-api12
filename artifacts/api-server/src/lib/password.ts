@@ -1,4 +1,5 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual, type ScryptOptions } from "node:crypto";
+import bcrypt from "bcrypt";
 
 // `util.promisify` can't infer the options-argument overload of `scrypt`, so
 // wrap it explicitly instead of casting away type safety.
@@ -21,6 +22,7 @@ function scrypt(password: string, salt: Buffer, keylen: number, options: ScryptO
 // `users.password_algo` column) so it can be migrated later without
 // invalidating existing password hashes.
 export const PASSWORD_ALGO = "scrypt" as const;
+export const BCRYPT_ALGO = "bcrypt" as const;
 
 const SALT_BYTES = 16;
 const KEY_LENGTH = 64;
@@ -49,7 +51,16 @@ export async function hashPassword(password: string): Promise<string> {
 export async function verifyPassword(
   password: string,
   storedHash: string,
+  algorithm: string = PASSWORD_ALGO,
 ): Promise<boolean> {
+  if (algorithm === BCRYPT_ALGO) {
+    return bcrypt.compare(password, storedHash);
+  }
+
+  if (algorithm !== PASSWORD_ALGO) {
+    return false;
+  }
+
   const [saltHex, keyHex] = storedHash.split(":");
   if (!saltHex || !keyHex) {
     return false;

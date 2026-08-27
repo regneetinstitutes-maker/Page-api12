@@ -3,12 +3,19 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "pg": "^8.16.3"
+  },
   "scripts": {
+    "create-admin": "tsx ./src/create-admin.ts",
     "hello": "tsx ./src/hello.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@types/bcrypt": "^6.0.0",
+    "@types/pg": "^8.15.5",
     "tsx": "catalog:"
   }
 }
