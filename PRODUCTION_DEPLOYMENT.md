@@ -178,6 +178,25 @@ sudo systemctl reload nginx
   - In EC2 environment variables
   - In a `.env` file on EC2 (not committed to the repository)
 
+## Create or Reset the Admin Account
+
+The `users` table stores bcrypt credentials in `password_hash` and identifies
+the algorithm in `password_algo`. From the repository root on EC2, run the
+seed with the database URL and password supplied at runtime:
+
+```bash
+read -rsp 'Admin password: ' ADMIN_PASSWORD; echo
+export ADMIN_PASSWORD
+export DATABASE_URL='postgresql://<db-user>:<db-password>@<rds-host>:5432/<db-name>?sslmode=require'
+pnpm --filter @workspace/scripts create-admin
+unset ADMIN_PASSWORD DATABASE_URL
+```
+
+The default account is `admin_niha`. The seed uses bcrypt with 10 salt rounds,
+sets the role to `admin`, and updates the existing account instead of failing
+on the username uniqueness constraint. Set `PGSSLROOTCERT` to the RDS CA
+bundle path when the host does not already trust the RDS certificate.
+
 **Example: Set additional variables on EC2**
 
 ```bash

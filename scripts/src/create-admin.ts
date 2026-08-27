@@ -16,6 +16,10 @@ if (!password) {
   throw new Error("ADMIN_PASSWORD must be set");
 }
 
+if (password.length < 12) {
+  throw new Error("ADMIN_PASSWORD must be at least 12 characters long");
+}
+
 const ca = process.env.PGSSLROOTCERT_CONTENT
   ?? (process.env.PGSSLROOTCERT
     ? readFileSync(process.env.PGSSLROOTCERT, "utf8")
