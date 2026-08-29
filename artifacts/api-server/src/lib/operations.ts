@@ -16,6 +16,8 @@ import {
   type User,
 } from "@workspace/db";
 import { hashPassword, PASSWORD_ALGO } from "./password";
+import { recordCompletedTransaction } from "./wallet";
+import { notifyPush } from "./notifications";
 
 export class OperationsError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 400) {
@@ -103,6 +105,53 @@ export async function searchUserByMobile(mobileNumber: string) {
   };
 }
 
+export async function searchUsers(query: string) {
+  const normalized = query.trim();
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized);
+  const users = await db.select().from(usersTable).where(
+    isUuid
+      ? eq(usersTable.id, normalized)
+      : or(
+          sql`${usersTable.username} ILIKE ${`%${normalized}%`}`,
+          sql`${usersTable.name} ILIKE ${`%${normalized}%`}`,
+          sql`${usersTable.email} ILIKE ${`%${normalized}%`}`,
+          sql`${usersTable.mobileNumber} ILIKE ${`%${normalized}%`}`,
+        ),
+  ).limit(25);
+  return Promise.all(users.map(async (user) => {
+    const wallets = await db.select().from(walletAccountsTable).where(eq(walletAccountsTable.userId, user.id));
+    const [activity] = await db.select({ played: sql<string>`count(*)`, won: sql<string>`count(*) filter (where ${matchParticipantsTable.prizeAmount} > 0)` }).from(matchParticipantsTable).where(eq(matchParticipantsTable.userId, user.id));
+    return { user: publicUser(user), wallets, totalMatchesPlayed: Number(activity?.played ?? 0), totalWon: Number(activity?.won ?? 0), status: user.accountStatus === "active" ? "active" as const : "suspended" as const };
+  }));
+}
+
+export async function adjustUserWallet(userId: string, walletType: "play_coins" | "winning_coins", amount: number, reason: string) {
+  return db.transaction(async (tx) => {
+    const [wallet] = await tx.select().from(walletAccountsTable).where(and(eq(walletAccountsTable.userId, userId), eq(walletAccountsTable.walletType, walletType))).limit(1);
+    if (!wallet) throw new OperationsError("WALLET_NOT_FOUND", "Wallet was not found.", 404);
+    try {
+      return await recordCompletedTransaction(tx, { walletAccountId: wallet.id, amount, referenceType: "admin_adjustment", idempotencyKey: `admin-adjustment:${userId}:${walletType}:${crypto.randomUUID()}`, description: reason });
+    } catch (error) {
+      if (error instanceof Error && error.name === "InsufficientBalanceError") throw new OperationsError("INSUFFICIENT_BALANCE", "The adjustment would make the balance negative.");
+      throw error;
+    }
+  });
+}
+
+export async function broadcastAdminNotification(input: { title: string; message: string; targetAudience: "all" | "active_players" | "hosts" | "specific_user"; type: string; priority: string; deepLink: string; userId?: string }) {
+  const audience = input.targetAudience === "specific_user"
+    ? (input.userId ? [{ id: input.userId }] : [])
+    : await db.select({ id: usersTable.id }).from(usersTable).where(
+        input.targetAudience === "hosts"
+          ? or(eq(usersTable.role, "omb_host"), eq(usersTable.role, "tournament_host"))
+          : input.targetAudience === "active_players"
+            ? and(eq(usersTable.role, "user"), eq(usersTable.accountStatus, "active"))
+            : eq(usersTable.accountStatus, "active"),
+      );
+  for (const user of audience) notifyPush({ userId: user.id, title: input.title, body: input.message, data: { type: input.type, priority: input.priority, deepLink: input.deepLink } });
+  return { recipients: audience.length };
+}
+
 export async function updateUserAccountStatus(userId: string, accountStatus: "active" | "suspended" | "deactivated") {
   const [updated] = await db.update(usersTable).set({ accountStatus }).where(eq(usersTable.id, userId)).returning();
   if (!updated) throw new OperationsError("USER_NOT_FOUND", "User was not found.", 404);
@@ -158,7 +207,23 @@ export async function getAdminDashboard() {
   ]);
   const topDeposits = await db.select({ userId: depositsTable.userId, total: sql<string>`sum(${depositsTable.amount})` }).from(depositsTable).where(eq(depositsTable.status, "success")).groupBy(depositsTable.userId).orderBy(desc(sql`sum(${depositsTable.amount})`)).limit(20);
   const topWithdrawals = await db.select({ userId: withdrawalsTable.userId, total: sql<string>`sum(${withdrawalsTable.amount})` }).from(withdrawalsTable).where(eq(withdrawalsTable.status, "completed")).groupBy(withdrawalsTable.userId).orderBy(desc(sql`sum(${withdrawalsTable.amount})`)).limit(20);
+  const [[activeUsers], [activeOmbs], [activeTournaments], [upcoming], [completedOmbs], [completedTournaments], [deposited], [withdrawn]] = await Promise.all([
+    db.select({ total: sql<string>`count(*)` }).from(usersTable).where(sql`${usersTable.updatedAt} >= now() - interval '24 hours'`),
+    db.select({ total: sql<string>`count(*)` }).from(matchesTable).where(sql`${matchesTable.status} in ('waiting', 'room_available', 'ongoing', 'result_pending')`),
+    db.select({ total: sql<string>`count(*)` }).from(tournamentsTable).where(sql`${tournamentsTable.status} in ('waiting', 'ongoing', 'result_pending')`),
+    db.select({ total: sql<string>`count(*)` }).from(competitionSchedulesTable).where(and(eq(competitionSchedulesTable.status, "published"), sql`${competitionSchedulesTable.startsAt} > now()`)),
+    db.select({ total: sql<string>`count(*)` }).from(matchesTable).where(sql`${matchesTable.status} = 'completed' and ${matchesTable.updatedAt}::date = current_date`),
+    db.select({ total: sql<string>`count(*)` }).from(tournamentsTable).where(sql`${tournamentsTable.status} = 'completed' and ${tournamentsTable.updatedAt}::date = current_date`),
+    db.select({ total: sql<string>`coalesce(sum(${depositsTable.amount}), 0)` }).from(depositsTable).where(eq(depositsTable.status, "success")),
+    db.select({ total: sql<string>`coalesce(sum(${withdrawalsTable.amount}), 0)` }).from(withdrawalsTable).where(eq(withdrawalsTable.status, "completed")),
+  ]);
+  const topWinners = await db.select({ userId: matchParticipantsTable.userId, name: usersTable.name, amount: sql<string>`sum(${matchParticipantsTable.prizeAmount})` }).from(matchParticipantsTable).innerJoin(usersTable, eq(usersTable.id, matchParticipantsTable.userId)).groupBy(matchParticipantsTable.userId, usersTable.name).orderBy(desc(sql`sum(${matchParticipantsTable.prizeAmount})`)).limit(10);
+  const topDepositorUsers = await db.select({ userId: depositsTable.userId, name: usersTable.name, amount: sql<string>`sum(${depositsTable.amount})` }).from(depositsTable).innerJoin(usersTable, eq(usersTable.id, depositsTable.userId)).where(eq(depositsTable.status, "success")).groupBy(depositsTable.userId, usersTable.name).orderBy(desc(sql`sum(${depositsTable.amount})`)).limit(10);
   return {
+    users: { total: Number(users?.total ?? 0), activeLast24h: Number(activeUsers?.total ?? 0) },
+    competitions: { active: Number(activeOmbs?.total ?? 0) + Number(activeTournaments?.total ?? 0), upcoming: Number(upcoming?.total ?? 0), completedToday: Number(completedOmbs?.total ?? 0) + Number(completedTournaments?.total ?? 0) },
+    financials: { totalDeposited: Number(deposited?.total ?? 0), totalWithdrawn: Number(withdrawn?.total ?? 0), platformMargin: Number(deposited?.total ?? 0) - Number(withdrawn?.total ?? 0) },
+    leaders: { topWinners: topWinners.map((row) => ({ userId: row.userId, name: row.name, amount: Number(row.amount ?? 0) })), topDepositors: topDepositorUsers.map((row) => ({ userId: row.userId, name: row.name, amount: Number(row.amount ?? 0) })) },
     totals: {
       users: Number(users?.total ?? 0), hosts: Number(hosts?.total ?? 0), playCoins: Number(play?.total ?? 0), winningCoins: Number(winning?.total ?? 0), cancelledOmbs: Number(cancelledOmbs?.total ?? 0), cancelledTournaments: Number(cancelledTournaments?.total ?? 0),
     },

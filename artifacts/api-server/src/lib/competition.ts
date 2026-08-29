@@ -420,6 +420,17 @@ async function notifyCompetitionParticipants(type: CompetitionType, competitionI
   }
 }
 
+export async function setAdminRoomDetails(type: CompetitionType, competitionId: string, roomId: string, roomPassword: string) {
+  const updated = await db.transaction(async (tx) => {
+    const table = type === "omb" ? matchesTable : tournamentsTable;
+    const [event] = await tx.update(table).set({ roomId, roomPassword, roomDetailsAddedAt: new Date(), status: "room_available" }).where(eq(table.id, competitionId)).returning();
+    if (!event) throw new CompetitionError("COMPETITION_NOT_FOUND", "Competition was not found.", 404);
+    return event;
+  });
+  void notifyCompetitionParticipants(type, competitionId, "Room details available", `The room ID and password for ${updated.code} are now available.`);
+  return updated;
+}
+
 async function nextSeat(tx: Tx, eventId: string, type: CompetitionType): Promise<number> {
   const [row] =
     type === "omb"

@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
-import { CompetitionError, LOW_PARTICIPATION_REASON, addRoomDetails, attachCompetitionObject, cancelCompetition, claimCompetition, confirmRoomParticipant, createCompetitionUploadUrl, createGame, createHost, createMode, createSchedule, createTournamentPositionReveal, getAvailableCompetitions, getCompetition, getCompetitionObjectDownloadUrl, getTournamentParticipantList, joinCompetition, listGames, listHosts, listModes, listSchedules, markHostPaid, releaseCompetition, resetHostPassword, runCompetitionScheduler, snoozeCompetitionUnclaimedAlert, startTournamentParticipant, submitOmbResults, submitTournamentPositionReveal, submitTournamentResults, updateGame, updateHost, updateMode, updateSchedule } from "../lib/competition";
+import { CompetitionError, LOW_PARTICIPATION_REASON, addRoomDetails, attachCompetitionObject, cancelCompetition, claimCompetition, confirmRoomParticipant, createCompetitionUploadUrl, createGame, createHost, createMode, createSchedule, createTournamentPositionReveal, getAvailableCompetitions, getCompetition, getCompetitionObjectDownloadUrl, getTournamentParticipantList, joinCompetition, listGames, listHosts, listModes, listSchedules, markHostPaid, releaseCompetition, resetHostPassword, runCompetitionScheduler, setAdminRoomDetails, snoozeCompetitionUnclaimedAlert, startTournamentParticipant, submitOmbResults, submitTournamentPositionReveal, submitTournamentResults, updateGame, updateHost, updateMode, updateSchedule } from "../lib/competition";
 import { requireRole, requireSession } from "../middlewares/requireSession";
 
 const router: IRouter = Router();
@@ -135,6 +135,14 @@ router.post("/competitions/omb/:id/room-details", requireSession, requireRole("o
     if (sendCompetitionError(res, error)) return;
     throw error;
   }
+});
+
+router.post("/admin/competitions/:id/room", requireSession, requireRole("admin"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const body = z.object({ type: competitionType.default("omb"), roomId: z.string().trim().min(1).max(128), roomPassword: z.string().trim().min(1).max(128) }).safeParse(req.body);
+  if (!id.success || !body.success) { res.status(400).json({ message: "Room ID and password are required." }); return; }
+  try { res.json({ competition: await setAdminRoomDetails(body.data.type, id.data, body.data.roomId, body.data.roomPassword) }); }
+  catch (error) { if (sendCompetitionError(res, error)) return; throw error; }
 });
 
 router.post("/competitions/omb/:id/participants/:participantId/confirm-room", requireSession, requireRole("omb_host"), async (req, res) => {
@@ -358,6 +366,22 @@ router.post("/admin/hosts/:id/password-reset", requireSession, requireRole("admi
     if (sendCompetitionError(res, error)) return;
     throw error;
   }
+});
+
+router.post("/admin/hosts/:id/reset-password", requireSession, requireRole("admin"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const body = z.object({ password: z.string().min(8).max(256) }).safeParse(req.body);
+  if (!id.success || !body.success) { res.status(400).json({ message: "A valid password is required." }); return; }
+  try { res.json({ user: await resetHostPassword(id.data, body.data.password) }); }
+  catch (error) { if (sendCompetitionError(res, error)) return; throw error; }
+});
+
+router.patch("/admin/hosts/:id/status", requireSession, requireRole("admin"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const body = z.object({ status: z.enum(["active", "suspended"]) }).safeParse(req.body);
+  if (!id.success || !body.success) { res.status(400).json({ message: "A valid host status is required." }); return; }
+  try { res.json({ host: await updateHost(id.data, { status: body.data.status === "active" ? "active" : "disabled" }) }); }
+  catch (error) { if (sendCompetitionError(res, error)) return; throw error; }
 });
 
 router.post("/manager/competitions/:type/:id/unclaimed-snooze", requireSession, requireRole("manager"), async (req, res) => {
