@@ -36,12 +36,15 @@ export function requireRole(
 }
 
 /**
- * Server-side session auth middleware. Validates the `sid` cookie against
- * `user_sessions`, extends the session's sliding expiration on success, and
- * attaches the authenticated user to `req.user`. Responds 401 otherwise.
+ * Server-side session auth middleware. Validates a header token or the `sid`
+ * cookie against `user_sessions`, extends the session's sliding expiration on
+ * success, and attaches the authenticated user to `req.user`. Responds 401 otherwise.
  */
 export async function requireSession(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const token = req.cookies?.[SESSION_COOKIE_NAME];
+  const authorization = req.get("authorization");
+  const bearerToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const accessToken = req.get("x-access-token")?.trim();
+  const token = bearerToken || accessToken || req.cookies?.[SESSION_COOKIE_NAME];
 
   if (!token || typeof token !== "string") {
     res.status(401).json({ message: "Authentication required." });
