@@ -41,12 +41,29 @@ export function requireRole(
  * success, and attaches the authenticated user to `req.user`. Responds 401 otherwise.
  */
 export async function requireSession(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const authorization = req.get("authorization");
-  const bearerToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  const accessToken = req.get("x-access-token")?.trim();
-  const token = bearerToken || accessToken || req.cookies?.[SESSION_COOKIE_NAME];
+  const authorizationHeader = req.get("authorization") ?? "";
+  const xAccessTokenHeader = req.get("x-access-token") ?? "";
 
-  if (!token || typeof token !== "string") {
+  let token = "";
+
+  if (authorizationHeader) {
+    const normalized = authorizationHeader.trim();
+    if (/^Bearer\s+/i.test(normalized)) {
+      token = normalized.replace(/^Bearer\s+/i, "").trim();
+    } else {
+      token = normalized;
+    }
+  }
+
+  if (!token && xAccessTokenHeader) {
+    token = xAccessTokenHeader.trim();
+  }
+
+  if (!token && req.cookies) {
+    token = typeof req.cookies[SESSION_COOKIE_NAME] === "string" ? req.cookies[SESSION_COOKIE_NAME] : "";
+  }
+
+  if (!token) {
     res.status(401).json({ message: "Authentication required." });
     return;
   }
