@@ -422,8 +422,8 @@ async function notifyCompetitionParticipants(type: CompetitionType, competitionI
 
 export async function setAdminRoomDetails(type: CompetitionType, competitionId: string, roomId: string, roomPassword: string) {
   const updated = await db.transaction(async (tx) => {
-    const table = type === "omb" ? matchesTable : tournamentsTable;
-    const [event] = await tx.update(table).set({ roomId, roomPassword, roomDetailsAddedAt: new Date(), status: "room_available" }).where(eq(table.id, competitionId)).returning();
+    if (type !== "omb") throw new CompetitionError("INVALID_COMPETITION_TYPE", "Room details are only available for OMB competitions.");
+    const [event] = await tx.update(matchesTable).set({ roomId, roomPassword, roomDetailsAddedAt: new Date(), status: "room_available" }).where(eq(matchesTable.id, competitionId)).returning();
     if (!event) throw new CompetitionError("COMPETITION_NOT_FOUND", "Competition was not found.", 404);
     return event;
   });

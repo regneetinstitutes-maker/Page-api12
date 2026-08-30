@@ -17,7 +17,6 @@ export const accountStatusEnum = pgEnum("account_status", [
 export const userRoleEnum = pgEnum("user_role", [
   "user",
   "admin",
-  "superadmin",
   "manager",
   "support",
   "omb_host",

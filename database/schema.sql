@@ -1,6 +1,6 @@
 CREATE TYPE "public"."account_status" AS ENUM('active', 'suspended', 'deactivated');
 CREATE TYPE "public"."mobile_verification_status" AS ENUM('not_started', 'pending', 'verified');
-CREATE TYPE "public"."user_role" AS ENUM('user', 'admin', 'superadmin', 'manager', 'support', 'omb_host', 'tournament_host');
+CREATE TYPE "public"."user_role" AS ENUM('user', 'admin', 'manager', 'support', 'omb_host', 'tournament_host');
 CREATE TYPE "public"."wallet_coin_type" AS ENUM('play_coins', 'winning_coins');
 CREATE TYPE "public"."deposit_status" AS ENUM('pending', 'success', 'failed');
 CREATE TYPE "public"."reservation_reason_type" AS ENUM('withdrawal', 'competition_entry', 'tournament_entry', 'admin_hold', 'fraud_hold', 'bonus_hold');

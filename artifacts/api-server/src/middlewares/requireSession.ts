@@ -19,7 +19,7 @@ export interface AuthenticatedUser {
   mobileVerificationStatus: "not_started" | "pending" | "verified";
   accountStatus: "active" | "suspended" | "deactivated";
   termsAcceptedAt: Date | null;
-  role: "user" | "admin" | "superadmin" | "manager" | "support" | "omb_host" | "tournament_host";
+  role: "user" | "admin" | "manager" | "support" | "omb_host" | "tournament_host";
   createdAt: Date;
 }
 
@@ -27,7 +27,7 @@ export function requireRole(
   ...roles: AuthenticatedUser["role"][]
 ): (req: Request, res: Response, next: NextFunction) => void {
   return (req, res, next) => {
-    if (!req.user || (req.user.role !== "superadmin" && !roles.includes(req.user.role))) {
+    if (!req.user || !roles.includes(req.user.role)) {
       res.status(403).json({ message: "You do not have permission to perform this action." });
       return;
     }
