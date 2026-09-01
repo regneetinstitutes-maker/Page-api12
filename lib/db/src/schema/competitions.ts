@@ -65,6 +65,12 @@ export const modesTable = pgTable(
       .references(() => gamesTable.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     logoUrl: text("logo_url"),
+    type: competitionTypeEnum("type").notNull(),
+    entryFee: integer("entry_fee").notNull(),
+    maxParticipants: integer("max_participants").notNull(),
+    teamSize: integer("team_size").notNull().default(1),
+    prizes: jsonb("prizes").$type<PrizeDefinition[]>().notNull().default([]),
+    tournamentMetric: text("tournament_metric"),
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -74,7 +80,10 @@ export const modesTable = pgTable(
   },
   (table) => [
     unique("competition_modes_game_name_unique").on(table.gameId, table.name),
-    index("competition_modes_game_id_idx").on(table.gameId),
+    index("competition_modes_game_type_idx").on(table.gameId, table.type),
+    check("competition_modes_entry_fee_positive", sql`${table.entryFee} > 0`),
+    check("competition_modes_max_participants_positive", sql`${table.maxParticipants} > 0`),
+    check("competition_modes_team_size_positive", sql`${table.teamSize} > 0`),
   ],
 );
 
@@ -85,19 +94,13 @@ export const competitionSchedulesTable = pgTable(
     modeId: uuid("mode_id")
       .notNull()
       .references(() => modesTable.id, { onDelete: "restrict" }),
-    type: competitionTypeEnum("type").notNull(),
     status: competitionScheduleStatusEnum("status").notNull().default("draft"),
-    entryFee: integer("entry_fee").notNull(),
-    maxParticipants: integer("max_participants").notNull(),
-    teamSize: integer("team_size").notNull().default(1),
     startsAt: timestamp("starts_at", { withTimezone: true }),
     entryClosesAt: timestamp("entry_closes_at", { withTimezone: true }),
     durationMinutes: integer("duration_minutes"),
     roomRevealMinutesBeforeStart: integer("room_reveal_minutes_before_start"),
     resultDeadlineMinutes: integer("result_deadline_minutes").notNull().default(90),
     managerAlertAfterMinutes: integer("manager_alert_after_minutes").notNull().default(5),
-    tournamentMetric: text("tournament_metric"),
-    prizes: jsonb("prizes").$type<PrizeDefinition[]>().notNull().default([]),
     guideVideoUrl: text("guide_video_url"),
     notes: text("notes"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -107,14 +110,10 @@ export const competitionSchedulesTable = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
-    index("competition_schedules_mode_type_status_idx").on(
+    index("competition_schedules_mode_status_idx").on(
       table.modeId,
-      table.type,
       table.status,
     ),
-    check("competition_schedules_entry_fee_positive", sql`${table.entryFee} > 0`),
-    check("competition_schedules_max_participants_positive", sql`${table.maxParticipants} > 0`),
-    check("competition_schedules_team_size_positive", sql`${table.teamSize} > 0`),
     check("competition_schedules_result_deadline_positive", sql`${table.resultDeadlineMinutes} > 0`),
     check("competition_schedules_manager_alert_nonnegative", sql`${table.managerAlertAfterMinutes} >= 0`),
   ],

@@ -412,7 +412,17 @@ router.post("/admin/competition/games", requireSession, requireRole("admin"), as
 });
 
 router.post("/admin/competition/modes", requireSession, requireRole("admin"), async (req, res) => {
-  const parsed = z.object({ gameId: z.string().uuid(), name: z.string().trim().min(1).max(128), logoUrl: z.string().url().nullable().optional() }).safeParse(req.body);
+  const parsed = z.object({
+    gameId: z.string().uuid(),
+    name: z.string().trim().min(1).max(128),
+    type: competitionType,
+    entryFee: z.number().int().positive(),
+    maxParticipants: z.number().int().positive(),
+    teamSize: z.number().int().positive().default(1),
+    prizes: z.array(z.object({ position: z.number().int().positive(), amount: z.number().int().nonnegative() })).default([]),
+    tournamentMetric: z.string().trim().min(1).max(128).nullable().optional(),
+    logoUrl: z.string().url().nullable().optional()
+  }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ message: parsed.error.message });
     return;
@@ -429,7 +439,17 @@ router.patch("/admin/competition/games/:id", requireSession, requireRole("admin"
 
 router.patch("/admin/competition/modes/:id", requireSession, requireRole("admin"), async (req, res) => {
   const id = z.string().uuid().safeParse(req.params.id);
-  const body = z.object({ name: z.string().trim().min(1).max(128).optional(), logoUrl: z.string().url().nullable().optional(), isActive: z.boolean().optional() }).safeParse(req.body);
+  const body = z.object({
+    name: z.string().trim().min(1).max(128).optional(),
+    type: competitionType.optional(),
+    entryFee: z.number().int().positive().optional(),
+    maxParticipants: z.number().int().positive().optional(),
+    teamSize: z.number().int().positive().optional(),
+    prizes: z.array(z.object({ position: z.number().int().positive(), amount: z.number().int().nonnegative() })).optional(),
+    tournamentMetric: z.string().trim().min(1).max(128).nullable().optional(),
+    logoUrl: z.string().url().nullable().optional(),
+    isActive: z.boolean().optional()
+  }).safeParse(req.body);
   if (!id.success || !body.success) { res.status(400).json({ message: "Invalid mode update." }); return; }
   try { res.json({ mode: await updateMode(id.data, body.data) }); } catch (error) { if (sendCompetitionError(res, error)) return; throw error; }
 });
@@ -437,28 +457,15 @@ router.patch("/admin/competition/modes/:id", requireSession, requireRole("admin"
 router.post("/admin/competition/schedules", requireSession, requireRole("admin"), async (req, res) => {
   const parsed = z.object({
     modeId: z.string().uuid(),
-    type: competitionType,
     status: z.enum(["draft", "published", "closed"]).default("draft"),
-    entryFee: z.number().int().positive(),
-    maxParticipants: z.number().int().positive(),
-    teamSize: z.number().int().positive().default(1),
     startsAt: z.coerce.date().nullable().optional(),
     entryClosesAt: z.coerce.date().nullable().optional(),
     durationMinutes: z.number().int().positive().nullable().optional(),
     roomRevealMinutesBeforeStart: z.number().int().nonnegative().nullable().optional(),
     resultDeadlineMinutes: z.number().int().positive().default(90),
     managerAlertAfterMinutes: z.number().int().nonnegative().default(5),
-    tournamentMetric: z.string().trim().min(1).max(128).nullable().optional(),
-    prizes: z.array(z.object({ position: z.number().int().positive(), amount: z.number().int().nonnegative() })).default([]),
     guideVideoUrl: z.string().url().nullable().optional(),
     notes: z.string().max(5000).nullable().optional(),
-  }).superRefine((value, context) => {
-    if (value.type === "omb" && (!value.startsAt || value.roomRevealMinutesBeforeStart == null)) {
-      context.addIssue({ code: "custom", message: "OMBs require startsAt and roomRevealMinutesBeforeStart.", path: ["startsAt"] });
-    }
-    if (value.type === "tournament" && (!value.entryClosesAt || !value.durationMinutes || !value.tournamentMetric)) {
-      context.addIssue({ code: "custom", message: "Tournaments require entryClosesAt, durationMinutes, and tournamentMetric.", path: ["entryClosesAt"] });
-    }
   }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ message: parsed.error.message });
@@ -471,7 +478,6 @@ router.post("/admin/competition/schedules", requireSession, requireRole("admin")
       entryClosesAt: parsed.data.entryClosesAt ?? null,
       durationMinutes: parsed.data.durationMinutes ?? null,
       roomRevealMinutesBeforeStart: parsed.data.roomRevealMinutesBeforeStart ?? null,
-      tournamentMetric: parsed.data.tournamentMetric ?? null,
       guideVideoUrl: parsed.data.guideVideoUrl ?? null,
       notes: parsed.data.notes ?? null,
     }),
