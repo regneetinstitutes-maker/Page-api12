@@ -19,6 +19,7 @@ import {
   walletTransactionsTable,
   type CompetitionSchedule,
   type Match,
+  type Mode,
   type PrizeDefinition,
   type Tournament,
 } from "@workspace/db";
@@ -45,8 +46,8 @@ function eventCode(type: CompetitionType): string {
   return `${type === "omb" ? "OMB" : "T"}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 }
 
-function winnerCount(schedule: CompetitionSchedule): number {
-  return schedule.prizes.length;
+function winnerCount(mode: Pick<Mode, "prizes">): number {
+  return mode.prizes.length;
 }
 
 function revealAt(schedule: CompetitionSchedule): Date | null {
@@ -54,22 +55,34 @@ function revealAt(schedule: CompetitionSchedule): Date | null {
   return new Date(schedule.startsAt.getTime() - schedule.roomRevealMinutesBeforeStart * 60_000);
 }
 
-function resultDeadline(schedule: CompetitionSchedule): Date | null {
-  const end = schedule.type === "omb"
+function resultDeadline(mode: Pick<Mode, "type">, schedule: CompetitionSchedule): Date | null {
+  const end = mode.type === "omb"
     ? schedule.startsAt
     : schedule.entryClosesAt;
   if (!end) return null;
   return new Date(end.getTime() + schedule.resultDeadlineMinutes * 60_000);
 }
 
-async function getSchedule(tx: Tx, scheduleId: string, type?: CompetitionType): Promise<CompetitionSchedule> {
-  const [schedule] = await tx
-    .select()
+async function getModeForSchedule(tx: Tx | typeof db, scheduleId: string, type?: CompetitionType): Promise<Mode> {
+  const [row] = await tx
+    .select({ mode: modesTable })
     .from(competitionSchedulesTable)
-    .where(and(eq(competitionSchedulesTable.id, scheduleId), type ? eq(competitionSchedulesTable.type, type) : undefined))
+    .innerJoin(modesTable, eq(modesTable.id, competitionSchedulesTable.modeId))
+    .where(and(eq(competitionSchedulesTable.id, scheduleId), type ? eq(modesTable.type, type) : undefined))
     .limit(1);
-  if (!schedule) throw new CompetitionError("SCHEDULE_NOT_FOUND", "Competition schedule was not found.");
-  return schedule;
+  if (!row) throw new CompetitionError("SCHEDULE_NOT_FOUND", "Competition schedule was not found.");
+  return row.mode;
+}
+
+async function getSchedule(tx: Tx | typeof db, scheduleId: string, type?: CompetitionType): Promise<CompetitionSchedule> {
+  const [row] = await tx
+    .select({ schedule: competitionSchedulesTable })
+    .from(competitionSchedulesTable)
+    .innerJoin(modesTable, eq(modesTable.id, competitionSchedulesTable.modeId))
+    .where(and(eq(competitionSchedulesTable.id, scheduleId), type ? eq(modesTable.type, type) : undefined))
+    .limit(1);
+  if (!row) throw new CompetitionError("SCHEDULE_NOT_FOUND", "Competition schedule was not found.");
+  return row.schedule;
 }
 
 async function getWallet(tx: Tx, userId: string) {
@@ -227,17 +240,19 @@ export async function listModes(gameId?: string) {
 }
 
 export async function listSchedules(type: CompetitionType, modeId?: string) {
-  return db
-    .select()
+  const rows = await db
+    .select({ schedule: competitionSchedulesTable })
     .from(competitionSchedulesTable)
+    .innerJoin(modesTable, eq(modesTable.id, competitionSchedulesTable.modeId))
     .where(
       and(
-        eq(competitionSchedulesTable.type, type),
+        eq(modesTable.type, type),
         eq(competitionSchedulesTable.status, "published"),
         modeId ? eq(competitionSchedulesTable.modeId, modeId) : undefined,
       ),
     )
     .orderBy(asc(competitionSchedulesTable.startsAt), asc(competitionSchedulesTable.entryClosesAt));
+  return rows.map((row) => row.schedule);
 }
 
 async function findOpenMatch(tx: Tx, scheduleId: string, maxParticipants: number) {
@@ -321,21 +336,22 @@ export async function joinCompetition(input: JoinInput) {
     if (!schedule || schedule.status !== "published") {
       throw new CompetitionError("SCHEDULE_UNAVAILABLE", "This competition is not available for joining.");
     }
+    const mode = await getModeForSchedule(tx, schedule.id);
     const now = new Date();
-    const closingTime = schedule.type === "omb" ? schedule.startsAt : schedule.entryClosesAt;
+    const closingTime = mode.type === "omb" ? schedule.startsAt : schedule.entryClosesAt;
     if (closingTime && now >= closingTime) {
       throw new CompetitionError("ENTRY_CLOSED", "Entry for this competition has closed.");
     }
-    await assertNotAlreadyJoined(tx, input.userId, input.scheduleId, schedule.type);
+    await assertNotAlreadyJoined(tx, input.userId, input.scheduleId, mode.type);
     const wallet = await getWallet(tx, input.userId);
 
     const existing =
-      schedule.type === "omb"
-        ? await findOpenMatch(tx, schedule.id, schedule.maxParticipants)
-        : await findOpenTournament(tx, schedule.id, schedule.maxParticipants);
+      mode.type === "omb"
+        ? await findOpenMatch(tx, schedule.id, mode.maxParticipants)
+        : await findOpenTournament(tx, schedule.id, mode.maxParticipants);
     const event =
       existing ??
-      (schedule.type === "omb"
+      (mode.type === "omb"
         ? (
             await tx
               .insert(matchesTable)
@@ -356,7 +372,7 @@ export async function joinCompetition(input: JoinInput) {
 
     const reservation = await createReservation(tx, {
       walletAccountId: wallet.id,
-      amount: schedule.entryFee,
+      amount: mode.entryFee,
       reasonType: "competition_entry",
       reasonId: event.id,
       idempotencyKey: `competition-entry:${event.id}:${input.userId}`,
@@ -364,13 +380,13 @@ export async function joinCompetition(input: JoinInput) {
     const settled = await confirmReservation(tx, {
       reservationId: reservation.id,
       transactionIdempotencyKey: `competition-entry-debit:${event.id}:${input.userId}`,
-      referenceType: schedule.type === "omb" ? "omb_entry" : "tournament_entry",
+      referenceType: mode.type === "omb" ? "omb_entry" : "tournament_entry",
       referenceId: event.id,
-      description: `${schedule.type === "omb" ? "OMB" : "Tournament"} entry ${event.code}`,
+      description: `${mode.type === "omb" ? "OMB" : "Tournament"} entry ${event.code}`,
     });
 
     const participant =
-      schedule.type === "omb"
+      mode.type === "omb"
         ? (
             await tx
               .insert(matchParticipantsTable)
@@ -397,7 +413,7 @@ export async function joinCompetition(input: JoinInput) {
               .returning()
           )[0];
     if (!participant) throw new CompetitionError("JOIN_FAILED", "Unable to join the competition.", 500);
-    return { type: schedule.type, event, participant };
+    return { type: mode.type, event, participant };
   });
   logger.info({ event: "competition.joined", type: result.type, competitionId: result.event.id }, "Competition joined.");
   void notifyNewCompetitionHosts(result.type, result.event.id);
@@ -635,6 +651,7 @@ export async function submitOmbResults(
     }
     const [schedule] = await tx.select().from(competitionSchedulesTable).where(eq(competitionSchedulesTable.id, match.scheduleId)).limit(1);
     if (!schedule) throw new CompetitionError("SCHEDULE_NOT_FOUND", "Schedule was not found.", 500);
+    const mode = await getModeForSchedule(tx, schedule.id, "omb");
     const participants = await tx.select().from(matchParticipantsTable).where(eq(matchParticipantsTable.matchId, id)).for("update");
     if (!participants.length || positions.length !== participants.length) {
       throw new CompetitionError("POSITIONS_REQUIRED", "Submit exactly one position for every participant.");
@@ -643,7 +660,7 @@ export async function submitOmbResults(
     if (positionSet.size !== positions.length || Math.min(...positions.map((item) => item.position)) < 1) {
       throw new CompetitionError("INVALID_POSITIONS", "Positions must be unique positive numbers.");
     }
-    const prizeByPosition = new Map(schedule.prizes.map((prize) => [prize.position, prize.amount]));
+    const prizeByPosition = new Map(mode.prizes.map((prize) => [prize.position, prize.amount]));
     for (const item of positions) {
       assertDoubleEntry(item.position, item.positionConfirmation);
       assertDoubleEntry(item.isCheater === true, item.cheaterConfirmation === true);
@@ -872,7 +889,8 @@ export async function submitTournamentResults(
     });
     scored.sort((a, b) => b.performance - a.performance || a.participant.joinedAt.getTime() - b.participant.joinedAt.getTime());
     const schedule = await getSchedule(tx, tournament.scheduleId, "tournament");
-    const prizeByPosition = new Map(schedule.prizes.map((prize) => [prize.position, prize.amount]));
+    const mode = await getModeForSchedule(tx, schedule.id, "tournament");
+    const prizeByPosition = new Map(mode.prizes.map((prize) => [prize.position, prize.amount]));
     for (const [index, item] of scored.entries()) {
       if (item.isCheater) cheaterUserIds.push(item.participant.userId);
       const rank = index + 1;
@@ -920,13 +938,14 @@ export async function createTournamentPositionReveal(input: {
   revealAt: Date;
 }) {
   const schedule = await db
-    .select({ id: competitionSchedulesTable.id, type: competitionSchedulesTable.type })
+    .select({ id: competitionSchedulesTable.id, modeId: competitionSchedulesTable.modeId })
     .from(competitionSchedulesTable)
     .where(eq(competitionSchedulesTable.id, input.scheduleId))
     .limit(1);
-  if (!schedule[0] || schedule[0].type !== "tournament") {
+  if (!schedule[0]) {
     throw new CompetitionError("SCHEDULE_NOT_FOUND", "Tournament schedule was not found.", 404);
   }
+  const mode = await getModeForSchedule(db, schedule[0].id, "tournament");
   const [reveal] = await db
     .insert(tournamentPositionRevealsTable)
     .values({ scheduleId: input.scheduleId, revealAt: input.revealAt })
@@ -1000,7 +1019,7 @@ export async function submitTournamentPositionReveal(
         submittedAt,
       })),
     );
-    const winnerCount = (await getSchedule(tx, tournament.scheduleId, "tournament")).prizes.length;
+    const winnerCount = (await getModeForSchedule(tx, tournament.scheduleId, "tournament")).prizes.length;
     return {
       revealId,
       tournamentId,
@@ -1160,9 +1179,9 @@ async function distributeLowParticipationPrizes(
   type: CompetitionType,
   competitionId: string,
   participants: Array<{ id: string; userId: string; reservationId: string }>,
-  schedule: CompetitionSchedule,
+  mode: Pick<Mode, "prizes">,
 ) {
-  const shuffled = [...schedule.prizes].sort(() => randomInt(-1_000_000, 1_000_001));
+  const shuffled = [...mode.prizes].sort(() => randomInt(-1_000_000, 1_000_001));
   for (const [index, participant] of participants.entries()) {
     const prizeAmount = shuffled[index]?.amount ?? 0;
     if (type === "omb") {
@@ -1192,8 +1211,8 @@ export async function cancelCompetition(
     if (refund) {
       for (const participant of participants) await refundParticipant(tx, participant.reservationId, id, participant.userId);
     } else if (lowParticipation) {
-      const schedule = await getSchedule(tx, event.scheduleId, type);
-      await distributeLowParticipationPrizes(tx, type, id, participants, schedule);
+      const mode = await getModeForSchedule(tx, event.scheduleId, type);
+      await distributeLowParticipationPrizes(tx, type, id, participants, mode);
     }
     const [updated] = await tx.update(table).set({ status: "cancelled", cancellationReason: reason, cancelledAt: new Date() }).where(eq(table.id, id)).returning();
     if (event.hostId) {
@@ -1237,13 +1256,53 @@ export async function updateGame(id: string, input: { name?: string; logoUrl?: s
   return game;
 }
 
-export async function createMode(input: { gameId: string; name: string; logoUrl?: string | null }) {
-  const [mode] = await db.insert(modesTable).values({ gameId: input.gameId, name: input.name.trim(), logoUrl: input.logoUrl ?? null }).returning();
+export async function createMode(input: {
+  gameId: string;
+  name: string;
+  type: CompetitionType;
+  entryFee: number;
+  maxParticipants: number;
+  teamSize?: number;
+  prizes?: PrizeDefinition[];
+  tournamentMetric?: string | null;
+  logoUrl?: string | null;
+}) {
+  const [mode] = await db.insert(modesTable).values({
+    gameId: input.gameId,
+    name: input.name.trim(),
+    type: input.type,
+    entryFee: input.entryFee,
+    maxParticipants: input.maxParticipants,
+    teamSize: input.teamSize ?? 1,
+    prizes: input.prizes ?? [],
+    tournamentMetric: input.tournamentMetric ?? null,
+    logoUrl: input.logoUrl ?? null,
+  }).returning();
   return mode;
 }
 
-export async function updateMode(id: string, input: { name?: string; logoUrl?: string | null; isActive?: boolean }) {
-  const [mode] = await db.update(modesTable).set({ name: input.name?.trim(), logoUrl: input.logoUrl, isActive: input.isActive }).where(eq(modesTable.id, id)).returning();
+export async function updateMode(id: string, input: {
+  name?: string;
+  type?: CompetitionType;
+  entryFee?: number;
+  maxParticipants?: number;
+  teamSize?: number;
+  prizes?: PrizeDefinition[];
+  tournamentMetric?: string | null;
+  logoUrl?: string | null;
+  isActive?: boolean;
+}) {
+  const [mode] = await db.update(modesTable).set({
+    name: input.name?.trim(),
+    type: input.type,
+    entryFee: input.entryFee,
+    maxParticipants: input.maxParticipants,
+    teamSize: input.teamSize,
+    prizes: input.prizes,
+    tournamentMetric: input.tournamentMetric,
+    logoUrl: input.logoUrl,
+    isActive: input.isActive,
+  }).where(eq(modesTable.id, id)).returning();
   if (!mode) throw new CompetitionError("MODE_NOT_FOUND", "Mode was not found.", 404);
   return mode;
 }
@@ -1279,7 +1338,8 @@ export async function getAvailableCompetitions(type: CompetitionType) {
 export async function runCompetitionScheduler(now = new Date()) {
   const schedules = await db.select().from(competitionSchedulesTable);
   for (const schedule of schedules) {
-    const type = schedule.type;
+    const mode = await getModeForSchedule(db, schedule.id);
+    const type = mode.type;
     const table = type === "omb" ? matchesTable : tournamentsTable;
     const events = await db.select().from(table).where(inArray(table.status, ["waiting", "room_available", "ongoing", "result_pending"]));
     for (const event of events.filter((candidate) => candidate.scheduleId === schedule.id)) {
@@ -1317,7 +1377,7 @@ export async function runCompetitionScheduler(now = new Date()) {
         .where(eq(table.scheduleId, schedule.id))
         .orderBy(desc(table.createdAt))
         .limit(1);
-      if (eventRecord.status === "waiting" && latestEvent?.id === eventRecord.id && lowParticipationAt && now >= lowParticipationAt && participantCount <= winnerCount(schedule)) {
+      if (eventRecord.status === "waiting" && latestEvent?.id === eventRecord.id && lowParticipationAt && now >= lowParticipationAt && participantCount <= winnerCount(mode)) {
         await cancelCompetition(type, eventRecord.id, LOW_PARTICIPATION_REASON, false, true);
         continue;
       }
@@ -1362,7 +1422,7 @@ export async function runCompetitionScheduler(now = new Date()) {
       const deadline =
         type === "tournament" && (eventRecord as Tournament).endsAt
           ? new Date((eventRecord as Tournament).endsAt!.getTime() + schedule.resultDeadlineMinutes * 60_000)
-          : resultDeadline(schedule);
+          : resultDeadline(mode, schedule);
       if (
         deadline &&
         now >= new Date(deadline.getTime() + 3 * 60_000) &&
