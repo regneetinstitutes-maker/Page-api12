@@ -45,18 +45,42 @@ ALTER TABLE "competition_modes" ALTER COLUMN "type" SET NOT NULL;
 ALTER TABLE "competition_modes" ALTER COLUMN "entry_fee" SET NOT NULL;
 ALTER TABLE "competition_modes" ALTER COLUMN "max_participants" SET NOT NULL;
 
--- Step 4: Add CHECK constraints to competition_modes
-ALTER TABLE "competition_modes" 
-  ADD CONSTRAINT "competition_modes_entry_fee_positive" 
-  CHECK ("entry_fee" > 0);
+-- Step 4: Add CHECK constraints to competition_modes if they do not already exist
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public."competition_modes"'::regclass
+      AND conname = 'competition_modes_entry_fee_positive'
+  ) THEN
+    ALTER TABLE "competition_modes"
+      ADD CONSTRAINT "competition_modes_entry_fee_positive"
+      CHECK ("entry_fee" > 0);
+  END IF;
 
-ALTER TABLE "competition_modes" 
-  ADD CONSTRAINT "competition_modes_max_participants_positive" 
-  CHECK ("max_participants" > 0);
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public."competition_modes"'::regclass
+      AND conname = 'competition_modes_max_participants_positive'
+  ) THEN
+    ALTER TABLE "competition_modes"
+      ADD CONSTRAINT "competition_modes_max_participants_positive"
+      CHECK ("max_participants" > 0);
+  END IF;
 
-ALTER TABLE "competition_modes" 
-  ADD CONSTRAINT "competition_modes_team_size_positive" 
-  CHECK ("team_size" > 0);
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public."competition_modes"'::regclass
+      AND conname = 'competition_modes_team_size_positive'
+  ) THEN
+    ALTER TABLE "competition_modes"
+      ADD CONSTRAINT "competition_modes_team_size_positive"
+      CHECK ("team_size" > 0);
+  END IF;
+END $$;
 
 -- Step 5: Create unique index on (game_id, name) if it doesn't exist
 CREATE UNIQUE INDEX IF NOT EXISTS "competition_modes_game_name_unique" 
@@ -82,13 +106,30 @@ ALTER TABLE "competition_schedules" DROP COLUMN IF EXISTS "tournament_metric" CA
 
 -- Step 8: Ensure competition_schedules has the correct timing columns and indices
 -- These should already exist, but verify they're present
-ALTER TABLE "competition_schedules" 
-  ADD CONSTRAINT "competition_schedules_result_deadline_positive" 
-  CHECK ("result_deadline_minutes" > 0);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public."competition_schedules"'::regclass
+      AND conname = 'competition_schedules_result_deadline_positive'
+  ) THEN
+    ALTER TABLE "competition_schedules"
+      ADD CONSTRAINT "competition_schedules_result_deadline_positive"
+      CHECK ("result_deadline_minutes" > 0);
+  END IF;
 
-ALTER TABLE "competition_schedules" 
-  ADD CONSTRAINT "competition_schedules_manager_alert_nonnegative" 
-  CHECK ("manager_alert_after_minutes" >= 0);
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public."competition_schedules"'::regclass
+      AND conname = 'competition_schedules_manager_alert_nonnegative'
+  ) THEN
+    ALTER TABLE "competition_schedules"
+      ADD CONSTRAINT "competition_schedules_manager_alert_nonnegative"
+      CHECK ("manager_alert_after_minutes" >= 0);
+  END IF;
+END $$;
 
 -- Create index for schedule queries
 CREATE INDEX IF NOT EXISTS "competition_schedules_mode_status_idx" 
