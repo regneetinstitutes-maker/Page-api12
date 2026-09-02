@@ -1256,6 +1256,17 @@ export async function updateGame(id: string, input: { name?: string; logoUrl?: s
   return game;
 }
 
+export async function deleteGame(id: string) {
+  return db.transaction(async (tx) => {
+    const [game] = await tx.select().from(gamesTable).where(eq(gamesTable.id, id)).for("update");
+    if (!game) throw new CompetitionError("GAME_NOT_FOUND", "Game was not found.", 404);
+    const [mode] = await tx.select({ id: modesTable.id }).from(modesTable).where(eq(modesTable.gameId, id)).limit(1);
+    if (mode) throw new CompetitionError("GAME_HAS_MODES", "Delete all modes for this game before deleting it.", 409);
+    const [deleted] = await tx.update(gamesTable).set({ isActive: false }).where(eq(gamesTable.id, id)).returning();
+    return deleted;
+  });
+}
+
 export async function createMode(input: {
   gameId: string;
   name: string;
@@ -1307,6 +1318,22 @@ export async function updateMode(id: string, input: {
   return mode;
 }
 
+export async function deleteMode(id: string) {
+  return db.transaction(async (tx) => {
+    const [mode] = await tx.select().from(modesTable).where(eq(modesTable.id, id)).for("update");
+    if (!mode) throw new CompetitionError("MODE_NOT_FOUND", "Mode was not found.", 404);
+    const [schedule] = await tx.select({ status: competitionSchedulesTable.status }).from(competitionSchedulesTable).where(eq(competitionSchedulesTable.modeId, id)).limit(1);
+    if (schedule) {
+      const reason = schedule.status === "published"
+        ? "Delete active or upcoming schedules for this mode first."
+        : "Delete existing schedules for this mode first.";
+      throw new CompetitionError("MODE_HAS_SCHEDULES", reason, 409);
+    }
+    const [deleted] = await tx.delete(modesTable).where(eq(modesTable.id, id)).returning();
+    return deleted;
+  });
+}
+
 export async function createSchedule(input: Omit<CompetitionSchedule, "id" | "createdAt" | "updatedAt">) {
   const [schedule] = await db.insert(competitionSchedulesTable).values(input).returning();
   return schedule;
@@ -1316,6 +1343,46 @@ export async function updateSchedule(id: string, input: Partial<Omit<Competition
   const [schedule] = await db.update(competitionSchedulesTable).set(input).where(eq(competitionSchedulesTable.id, id)).returning();
   if (!schedule) throw new CompetitionError("SCHEDULE_NOT_FOUND", "Schedule was not found.", 404);
   return schedule;
+}
+
+export async function deleteSchedule(id: string, force = false) {
+  const inspection = await db.transaction(async (tx) => {
+    const [schedule] = await tx.select().from(competitionSchedulesTable).where(eq(competitionSchedulesTable.id, id)).for("update");
+    if (!schedule) throw new CompetitionError("SCHEDULE_NOT_FOUND", "Schedule was not found.", 404);
+    const [mode] = await tx.select({ type: modesTable.type }).from(modesTable).where(eq(modesTable.id, schedule.modeId)).limit(1);
+    if (!mode) throw new CompetitionError("MODE_NOT_FOUND", "The schedule mode was not found.", 409);
+    const table = mode.type === "omb" ? matchesTable : tournamentsTable;
+    const events = await tx.select({ id: table.id }).from(table).where(eq(table.scheduleId, id));
+    const eventIds = events.map((event) => event.id);
+    const participantCount = mode.type === "omb"
+      ? (eventIds.length ? (await tx.select({ id: matchParticipantsTable.id }).from(matchParticipantsTable).where(inArray(matchParticipantsTable.matchId, eventIds))).length : 0)
+      : (eventIds.length ? (await tx.select({ id: tournamentParticipantsTable.id }).from(tournamentParticipantsTable).where(inArray(tournamentParticipantsTable.tournamentId, eventIds))).length : 0);
+    return { type: mode.type, eventIds, participantCount };
+  });
+
+  if (inspection.participantCount > 0 && !force) {
+    await db.update(competitionSchedulesTable).set({ status: "closed" }).where(eq(competitionSchedulesTable.id, id));
+    throw new CompetitionError("SCHEDULE_HAS_PARTICIPANTS", "This schedule has participant entries or wallet holds and was closed instead. Use force=true to refund and cancel them.", 409);
+  }
+  if (inspection.participantCount > 0 && force) {
+    for (const eventId of inspection.eventIds) await cancelCompetition(inspection.type, eventId, "Schedule deleted by an administrator.", true);
+    await db.update(competitionSchedulesTable).set({ status: "closed" }).where(eq(competitionSchedulesTable.id, id));
+    return;
+  }
+  return db.transaction(async (tx) => {
+    const [schedule] = await tx.select().from(competitionSchedulesTable).where(eq(competitionSchedulesTable.id, id)).for("update");
+    if (!schedule) throw new CompetitionError("SCHEDULE_NOT_FOUND", "Schedule was not found.", 404);
+    const table = inspection.type === "omb" ? matchesTable : tournamentsTable;
+    await tx.delete(table).where(eq(table.scheduleId, id));
+    const [deleted] = await tx.delete(competitionSchedulesTable).where(eq(competitionSchedulesTable.id, id)).returning();
+    return deleted;
+  });
+}
+
+export async function deleteHost(id: string) {
+  const [host] = await db.update(hostsTable).set({ status: "disabled", currentAssignmentId: null, currentAssignmentType: null }).where(eq(hostsTable.id, id)).returning();
+  if (!host) throw new CompetitionError("HOST_NOT_FOUND", "Host was not found.", 404);
+  return host;
 }
 
 export async function getAvailableCompetitions(type: CompetitionType) {

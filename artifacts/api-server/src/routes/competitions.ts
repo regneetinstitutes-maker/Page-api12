@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
-import { CompetitionError, LOW_PARTICIPATION_REASON, addRoomDetails, attachCompetitionObject, cancelCompetition, claimCompetition, confirmRoomParticipant, createCompetitionUploadUrl, createGame, createHost, createMode, createSchedule, createTournamentPositionReveal, getAvailableCompetitions, getCompetition, getCompetitionObjectDownloadUrl, getTournamentParticipantList, joinCompetition, listGames, listHosts, listModes, listSchedules, markHostPaid, releaseCompetition, resetHostPassword, runCompetitionScheduler, setAdminRoomDetails, snoozeCompetitionUnclaimedAlert, startTournamentParticipant, submitOmbResults, submitTournamentPositionReveal, submitTournamentResults, updateGame, updateHost, updateMode, updateSchedule } from "../lib/competition";
+import { CompetitionError, LOW_PARTICIPATION_REASON, addRoomDetails, attachCompetitionObject, cancelCompetition, claimCompetition, confirmRoomParticipant, createCompetitionUploadUrl, createGame, createHost, createMode, createSchedule, createTournamentPositionReveal, deleteGame, deleteHost, deleteMode, deleteSchedule, getAvailableCompetitions, getCompetition, getCompetitionObjectDownloadUrl, getTournamentParticipantList, joinCompetition, listGames, listHosts, listModes, listSchedules, markHostPaid, releaseCompetition, resetHostPassword, runCompetitionScheduler, setAdminRoomDetails, snoozeCompetitionUnclaimedAlert, startTournamentParticipant, submitOmbResults, submitTournamentPositionReveal, submitTournamentResults, updateGame, updateHost, updateMode, updateSchedule } from "../lib/competition";
 import { requireRole, requireSession } from "../middlewares/requireSession";
 
 const router: IRouter = Router();
@@ -15,6 +15,14 @@ const joinBody = z.object({
 function sendCompetitionError(res: Parameters<IRouter["use"]>[1] extends never ? never : any, error: unknown) {
   if (error instanceof CompetitionError) {
     res.status(error.status).json({ code: error.code, message: error.message });
+    return true;
+  }
+  return false;
+}
+
+function sendDeleteError(res: any, error: unknown) {
+  if (error instanceof CompetitionError) {
+    res.status(error.status).json({ error: error.message });
     return true;
   }
   return false;
@@ -345,6 +353,13 @@ router.patch("/admin/hosts/:id", requireSession, requireRole("admin"), async (re
   }
 });
 
+router.delete("/admin/hosts/:id", requireSession, requireRole("admin"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  if (!id.success) { res.status(400).json({ error: "Invalid host identifier." }); return; }
+  try { await deleteHost(id.data); res.json({ success: true, message: "Deleted successfully", id: id.data }); }
+  catch (error) { if (sendDeleteError(res, error)) return; throw error; }
+});
+
 router.post("/admin/hosts/:id/pay", requireSession, requireRole("admin"), async (req, res) => {
   const id = z.string().uuid().safeParse(req.params.id);
   if (!id.success) { res.status(400).json({ message: "Invalid host identifier." }); return; }
@@ -437,6 +452,13 @@ router.patch("/admin/competition/games/:id", requireSession, requireRole("admin"
   try { res.json({ game: await updateGame(id.data, body.data) }); } catch (error) { if (sendCompetitionError(res, error)) return; throw error; }
 });
 
+router.delete("/admin/competition/games/:id", requireSession, requireRole("admin"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  if (!id.success) { res.status(400).json({ error: "Invalid game identifier." }); return; }
+  try { await deleteGame(id.data); res.json({ success: true, message: "Deleted successfully", id: id.data }); }
+  catch (error) { if (sendDeleteError(res, error)) return; throw error; }
+});
+
 router.patch("/admin/competition/modes/:id", requireSession, requireRole("admin"), async (req, res) => {
   const id = z.string().uuid().safeParse(req.params.id);
   const body = z.object({
@@ -452,6 +474,13 @@ router.patch("/admin/competition/modes/:id", requireSession, requireRole("admin"
   }).safeParse(req.body);
   if (!id.success || !body.success) { res.status(400).json({ message: "Invalid mode update." }); return; }
   try { res.json({ mode: await updateMode(id.data, body.data) }); } catch (error) { if (sendCompetitionError(res, error)) return; throw error; }
+});
+
+router.delete("/admin/competition/modes/:id", requireSession, requireRole("admin"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  if (!id.success) { res.status(400).json({ error: "Invalid mode identifier." }); return; }
+  try { await deleteMode(id.data); res.json({ success: true, message: "Deleted successfully", id: id.data }); }
+  catch (error) { if (sendDeleteError(res, error)) return; throw error; }
 });
 
 router.post("/admin/competition/schedules", requireSession, requireRole("admin"), async (req, res) => {
@@ -489,6 +518,14 @@ router.patch("/admin/competition/schedules/:id", requireSession, requireRole("ad
   const body = z.object({ status: z.enum(["draft", "published", "closed"]).optional(), entryFee: z.number().int().positive().optional(), maxParticipants: z.number().int().positive().optional(), teamSize: z.number().int().positive().optional(), startsAt: z.coerce.date().nullable().optional(), entryClosesAt: z.coerce.date().nullable().optional(), durationMinutes: z.number().int().positive().nullable().optional(), roomRevealMinutesBeforeStart: z.number().int().nonnegative().nullable().optional(), resultDeadlineMinutes: z.number().int().positive().optional(), managerAlertAfterMinutes: z.number().int().nonnegative().optional(), tournamentMetric: z.string().trim().min(1).max(128).nullable().optional(), prizes: z.array(z.object({ position: z.number().int().positive(), amount: z.number().int().nonnegative() })).optional(), guideVideoUrl: z.string().url().nullable().optional(), notes: z.string().max(5000).nullable().optional() }).safeParse(req.body);
   if (!id.success || !body.success) { res.status(400).json({ message: "Invalid schedule update." }); return; }
   try { res.json({ schedule: await updateSchedule(id.data, body.data) }); } catch (error) { if (sendCompetitionError(res, error)) return; throw error; }
+});
+
+router.delete("/admin/competition/schedules/:id", requireSession, requireRole("admin"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const force = z.coerce.boolean().catch(false).parse(req.query.force);
+  if (!id.success) { res.status(400).json({ error: "Invalid schedule identifier." }); return; }
+  try { await deleteSchedule(id.data, force); res.json({ success: true, message: "Deleted successfully", id: id.data }); }
+  catch (error) { if (sendDeleteError(res, error)) return; throw error; }
 });
 
 router.post("/admin/competition/tournament-position-reveals", requireSession, requireRole("admin"), async (req, res) => {

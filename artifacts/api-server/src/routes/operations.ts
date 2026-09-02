@@ -81,6 +81,14 @@ router.post("/admin/notifications/broadcast", requireSession, requireRole("admin
   res.status(201).json(await broadcastAdminNotification(body.data));
 });
 
+router.delete("/admin/content/:id", requireSession, requireRole("admin"), async (_req, res) => {
+  res.status(404).json({ error: "Content records are not configured in this backend." });
+});
+
+router.delete("/admin/notifications/:id", requireSession, requireRole("admin"), async (_req, res) => {
+  res.status(404).json({ error: "Persistent notification records are not configured in this backend." });
+});
+
 router.post("/operations/users/:id/password-reset", requireSession, requireRole("admin"), async (req, res) => {
   const id = z.string().uuid().safeParse(req.params.id);
   const parsed = z.object({ password: z.string().min(8).max(256) }).safeParse(req.body);
