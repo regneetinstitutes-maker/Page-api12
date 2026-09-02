@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
-import { CompetitionError, LOW_PARTICIPATION_REASON, addRoomDetails, attachCompetitionObject, cancelCompetition, claimCompetition, confirmRoomParticipant, createCompetitionUploadUrl, createGame, createHost, createMode, createSchedule, createTournamentPositionReveal, deleteGame, deleteHost, deleteMode, deleteSchedule, getAvailableCompetitions, getCompetition, getCompetitionObjectDownloadUrl, getTournamentParticipantList, joinCompetition, listGames, listHosts, listModes, listSchedules, markHostPaid, releaseCompetition, resetHostPassword, runCompetitionScheduler, setAdminRoomDetails, snoozeCompetitionUnclaimedAlert, startTournamentParticipant, submitOmbResults, submitTournamentPositionReveal, submitTournamentResults, updateGame, updateHost, updateMode, updateSchedule } from "../lib/competition";
+import { CompetitionError, LOW_PARTICIPATION_REASON, addRoomDetails, attachCompetitionObject, cancelCompetition, claimCompetition, confirmRoomParticipant, createCompetitionUploadUrl, createGame, createHost, createMode, createSchedule, createTournamentPositionReveal, deleteGame, deleteHost, deleteMode, deleteSchedule, getAvailableCompetitions, getCompetition, getCompetitionObjectDownloadUrl, getTournamentParticipantList, joinCompetition, listGames, listHosts, listModes, listSchedules, markHostPaid, permanentlyDeleteHost, releaseCompetition, resetHostPassword, runCompetitionScheduler, setAdminRoomDetails, snoozeCompetitionUnclaimedAlert, startTournamentParticipant, submitOmbResults, submitTournamentPositionReveal, submitTournamentResults, updateGame, updateHost, updateMode, updateSchedule } from "../lib/competition";
 import { requireRole, requireSession } from "../middlewares/requireSession";
 
 const router: IRouter = Router();
@@ -321,6 +321,7 @@ router.get("/hosts", requireSession, requireRole("admin", "manager"), async (req
 router.post("/admin/hosts", requireSession, requireRole("admin"), async (req, res) => {
   const parsed = z.object({
     name: z.string().trim().min(1).max(128),
+    username: z.string().trim().min(3).max(64).regex(/^[a-zA-Z0-9_.-]+$/).optional(),
     mobileNumber: z.string().trim().min(5).max(32),
     upiId: z.string().trim().min(3).max(128),
     password: z.string().min(8).max(256),
@@ -339,6 +340,7 @@ router.patch("/admin/hosts/:id", requireSession, requireRole("admin"), async (re
   const id = z.string().uuid().safeParse(req.params.id);
   const parsed = z.object({
     name: z.string().trim().min(1).max(128).optional(),
+    username: z.string().trim().min(3).max(64).regex(/^[a-zA-Z0-9_.-]+$/).optional(),
     mobileNumber: z.string().trim().min(5).max(32).optional(),
     upiId: z.string().trim().min(3).max(128).optional(),
     role: z.enum(["omb", "tournament"]).optional(),
@@ -355,8 +357,13 @@ router.patch("/admin/hosts/:id", requireSession, requireRole("admin"), async (re
 
 router.delete("/admin/hosts/:id", requireSession, requireRole("admin"), async (req, res) => {
   const id = z.string().uuid().safeParse(req.params.id);
+  const permanent = z.coerce.boolean().catch(false).parse(req.query.permanent);
   if (!id.success) { res.status(400).json({ error: "Invalid host identifier." }); return; }
-  try { await deleteHost(id.data); res.json({ success: true, message: "Deleted successfully", id: id.data }); }
+  try {
+    if (permanent) await permanentlyDeleteHost(id.data);
+    else await deleteHost(id.data);
+    res.json({ success: true, message: "Deleted successfully", id: id.data });
+  }
   catch (error) { if (sendDeleteError(res, error)) return; throw error; }
 });
 

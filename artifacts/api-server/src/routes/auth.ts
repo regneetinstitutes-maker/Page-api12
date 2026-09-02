@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, usersTable, type User } from "@workspace/db";
 import { LoginBody, LoginResponse, SignupBody, SignupResponse } from "@workspace/api-zod";
 import { hashPassword, verifyPassword, PASSWORD_ALGO } from "../lib/password";
@@ -93,13 +93,23 @@ router.post("/auth/login", async (req, res): Promise<void> => {
   }
 
   const { password } = parsed.data;
-  // Normalize the same way as signup so login is case-insensitive too.
-  const username = parsed.data.username.toLowerCase();
+  // Hosts may log in with their registered mobile number; usernames remain
+  // supported for every account.
+  const loginIdentifier = parsed.data.username.trim();
+  const username = loginIdentifier.toLowerCase();
+  const isMobileLogin = /^\+?[0-9]{5,32}$/.test(loginIdentifier);
 
   const [user] = await db
     .select()
     .from(usersTable)
-    .where(eq(usersTable.username, username))
+    .where(
+      isMobileLogin
+        ? and(
+            eq(usersTable.mobileNumber, loginIdentifier),
+            inArray(usersTable.role, ["omb_host", "tournament_host"]),
+          )
+        : eq(usersTable.username, username),
+    )
     .limit(1);
 
   if (!user) {

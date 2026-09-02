@@ -2,6 +2,7 @@ import { randomInt } from "node:crypto";
 import { and, asc, count, desc, eq, gt, gte, inArray, isNull, lt, ne, sql } from "drizzle-orm";
 import {
   db,
+  userBankAccountsTable,
   competitionSchedulesTable,
   competitionStatusEnum,
   gamesTable,
@@ -14,6 +15,8 @@ import {
   tournamentPositionValuesTable,
   tournamentsTable,
   usersTable,
+  depositsTable,
+  withdrawalsTable,
   walletAccountsTable,
   walletReservationsTable,
   walletTransactionsTable,
@@ -110,6 +113,7 @@ function assertDoubleEntry(first: string | number | boolean, second: string | nu
 
 export interface CreateHostInput {
   name: string;
+  username?: string;
   mobileNumber: string;
   upiId: string;
   password: string;
@@ -119,7 +123,7 @@ export interface CreateHostInput {
 export async function createHost(input: CreateHostInput) {
   return db.transaction(async (tx) => {
     const mobileNumber = input.mobileNumber.trim();
-    const username = `host_${mobileNumber.replace(/\D/g, "")}`;
+    const username = input.username?.trim() || `host_${mobileNumber.replace(/\D/g, "")}`;
     const [existing] = await tx
       .select({ id: usersTable.id })
       .from(usersTable)
@@ -128,6 +132,8 @@ export async function createHost(input: CreateHostInput) {
     if (existing) {
       throw new CompetitionError("HOST_MOBILE_EXISTS", "A user with this mobile number already exists.", 409);
     }
+    const [usernameConflict] = await tx.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.username, username)).limit(1);
+    if (usernameConflict) throw new CompetitionError("HOST_USERNAME_EXISTS", "This username is already in use.", 409);
 
     const passwordHash = await hashPassword(input.password);
     const [user] = await tx
@@ -172,7 +178,7 @@ export async function createHost(input: CreateHostInput) {
 
 export async function updateHost(
   hostId: string,
-  input: { name?: string; mobileNumber?: string; upiId?: string; role?: "omb" | "tournament"; status?: "active" | "disabled" },
+  input: { name?: string; username?: string; mobileNumber?: string; upiId?: string; role?: "omb" | "tournament"; status?: "active" | "disabled" },
 ) {
   return db.transaction(async (tx) => {
     const [host] = await tx.select().from(hostsTable).where(eq(hostsTable.id, hostId)).for("update");
@@ -184,6 +190,10 @@ export async function updateHost(
     if (!user) throw new CompetitionError("HOST_NOT_FOUND", "Host user was not found.", 404);
     const nextRole = input.role ?? host.role;
     const nextStatus = input.status ?? host.status;
+    if (input.username && input.username.trim() !== user.username) {
+      const [conflict] = await tx.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.username, input.username.trim())).limit(1);
+      if (conflict && conflict.id !== user.id) throw new CompetitionError("HOST_USERNAME_EXISTS", "This username is already in use.", 409);
+    }
     if (input.mobileNumber && input.mobileNumber.trim() !== host.mobileNumber) {
       const [conflict] = await tx
         .select({ id: usersTable.id })
@@ -196,6 +206,7 @@ export async function updateHost(
     }
     await tx.update(usersTable).set({
       name: input.name?.trim() ?? user.name,
+      username: input.username?.trim() ?? user.username,
       mobileNumber: input.mobileNumber?.trim() ?? user.mobileNumber,
       role: nextRole === "omb" ? "omb_host" : "tournament_host",
     }).where(eq(usersTable.id, user.id));
@@ -1232,9 +1243,10 @@ export async function listHosts(
   onlyFree = false,
   includeDisabled = false,
 ) {
-  return db
-    .select()
+  const hosts = await db
+    .select({ host: hostsTable, username: usersTable.username })
     .from(hostsTable)
+    .innerJoin(usersTable, eq(usersTable.id, hostsTable.userId))
     .where(
       and(
         role ? eq(hostsTable.role, role) : undefined,
@@ -1243,6 +1255,7 @@ export async function listHosts(
       ),
     )
     .orderBy(asc(hostsTable.createdAt));
+  return hosts.map(({ host, username }) => ({ ...host, username }));
 }
 
 export async function createGame(input: { name: string; logoUrl?: string | null }) {
@@ -1383,6 +1396,32 @@ export async function deleteHost(id: string) {
   const [host] = await db.update(hostsTable).set({ status: "disabled", currentAssignmentId: null, currentAssignmentType: null }).where(eq(hostsTable.id, id)).returning();
   if (!host) throw new CompetitionError("HOST_NOT_FOUND", "Host was not found.", 404);
   return host;
+}
+
+export async function permanentlyDeleteHost(id: string) {
+  return db.transaction(async (tx) => {
+    const [host] = await tx.select().from(hostsTable).where(eq(hostsTable.id, id)).for("update");
+    if (!host) throw new CompetitionError("HOST_NOT_FOUND", "Host was not found.", 404);
+    if (host.currentAssignmentId) throw new CompetitionError("HOST_BUSY", "Unassign this host before permanently deleting it.", 409);
+    const [user] = await tx.select().from(usersTable).where(eq(usersTable.id, host.userId)).for("update");
+    if (!user) throw new CompetitionError("HOST_NOT_FOUND", "Host user was not found.", 404);
+
+    const [financialReference] = await tx.select({ id: walletTransactionsTable.id }).from(walletTransactionsTable).innerJoin(walletAccountsTable, eq(walletAccountsTable.id, walletTransactionsTable.walletAccountId)).where(eq(walletAccountsTable.userId, user.id)).limit(1);
+    const [reservation] = await tx.select({ id: walletReservationsTable.id }).from(walletReservationsTable).innerJoin(walletAccountsTable, eq(walletAccountsTable.id, walletReservationsTable.walletAccountId)).where(eq(walletAccountsTable.userId, user.id)).limit(1);
+    const [deposit] = await tx.select({ id: depositsTable.id }).from(depositsTable).where(eq(depositsTable.userId, user.id)).limit(1);
+    const [withdrawal] = await tx.select({ id: withdrawalsTable.id }).from(withdrawalsTable).where(eq(withdrawalsTable.userId, user.id)).limit(1);
+    const [bankAccount] = await tx.select({ id: userBankAccountsTable.id }).from(userBankAccountsTable).where(eq(userBankAccountsTable.userId, user.id)).limit(1);
+    const [participant] = await tx.select({ id: matchParticipantsTable.id }).from(matchParticipantsTable).where(eq(matchParticipantsTable.userId, user.id)).limit(1);
+    const [tournamentParticipant] = await tx.select({ id: tournamentParticipantsTable.id }).from(tournamentParticipantsTable).where(eq(tournamentParticipantsTable.userId, user.id)).limit(1);
+    if (financialReference || reservation || deposit || withdrawal || bankAccount || participant || tournamentParticipant) {
+      throw new CompetitionError("HOST_HAS_HISTORY", "This host has financial or competition history and can only be disabled, not permanently deleted.", 409);
+    }
+
+    await tx.delete(hostsTable).where(eq(hostsTable.id, id));
+    await tx.delete(walletAccountsTable).where(eq(walletAccountsTable.userId, user.id));
+    await tx.delete(usersTable).where(eq(usersTable.id, user.id));
+    return { id };
+  });
 }
 
 export async function getAvailableCompetitions(type: CompetitionType) {
