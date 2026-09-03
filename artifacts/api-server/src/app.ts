@@ -30,6 +30,7 @@ const configuredOrigins = process.env.CORS_ORIGINS?.split(",").map((origin) => o
 const allowedOrigins = [...new Set([
   "https://pagewoga.online",
   "https://admin.pagewoga.online",
+  "https://manager.pagewoga.online",
   ...configuredOrigins,
 ])];
 app.use(cors({
