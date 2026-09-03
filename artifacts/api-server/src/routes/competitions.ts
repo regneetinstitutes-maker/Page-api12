@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
-import { CompetitionError, LOW_PARTICIPATION_REASON, addRoomDetails, attachCompetitionObject, cancelCompetition, claimCompetition, confirmRoomParticipant, createCompetitionUploadUrl, createGame, createHost, createMode, createSchedule, createTournamentPositionReveal, deleteGame, deleteHost, deleteMode, deleteSchedule, getAvailableCompetitions, getCompetition, getCompetitionObjectDownloadUrl, getTournamentParticipantList, joinCompetition, listGames, listHosts, listModes, listSchedules, markHostPaid, permanentlyDeleteHost, releaseCompetition, resetHostPassword, runCompetitionScheduler, setAdminRoomDetails, snoozeCompetitionUnclaimedAlert, startTournamentParticipant, submitOmbResults, submitTournamentPositionReveal, submitTournamentResults, updateGame, updateHost, updateMode, updateSchedule } from "../lib/competition";
+import { CompetitionError, LOW_PARTICIPATION_REASON, addRoomDetails, attachCompetitionObject, cancelCompetition, claimCompetition, confirmRoomParticipant, createCompetitionUploadUrl, createGame, createHost, createMode, createSchedule, createTournamentPositionReveal, deleteGame, deleteHost, deleteMode, deleteSchedule, getAvailableCompetitions, getCompetition, getCompetitionObjectDownloadUrl, getTournamentParticipantList, joinCompetition, listCancelledCompetitions, listGames, listHosts, listModes, listSchedules, markHostPaid, permanentlyDeleteHost, releaseCompetition, resetHostPassword, runCompetitionScheduler, setAdminRoomDetails, snoozeCompetitionUnclaimedAlert, startTournamentParticipant, submitOmbResults, submitTournamentPositionReveal, submitTournamentResults, updateGame, updateHost, updateMode, updateSchedule } from "../lib/competition";
 import { requireRole, requireSession } from "../middlewares/requireSession";
 
 const router: IRouter = Router();
@@ -80,6 +80,12 @@ router.get("/competitions/:type/:id", requireSession, async (req, res) => {
     return;
   }
   res.json(result);
+});
+
+router.get("/manager/competitions/cancelled", requireSession, requireRole("manager"), async (req, res) => {
+  const type = z.enum(["omb", "tournament"]).optional().safeParse(req.query.type);
+  if (!type.success) { res.status(400).json({ message: "Invalid competition type." }); return; }
+  res.json({ competitions: await listCancelledCompetitions(type.data) });
 });
 
 router.post("/competitions/join", requireSession, async (req, res) => {
@@ -310,12 +316,12 @@ router.post("/competitions/tournament/:id/position-reveals/:revealId", requireSe
 });
 
 router.get("/hosts", requireSession, requireRole("admin", "manager"), async (req, res) => {
-  const parsed = z.object({ role: z.enum(["omb", "tournament"]).optional(), free: z.coerce.boolean().optional(), includeDisabled: z.coerce.boolean().optional() }).safeParse(req.query);
+  const parsed = z.object({ role: z.enum(["omb", "tournament"]).optional(), free: z.coerce.boolean().optional(), includeDisabled: z.coerce.boolean().optional(), search: z.string().trim().max(128).optional() }).safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ message: parsed.error.message });
     return;
   }
-  res.json({ hosts: await listHosts(parsed.data.role, parsed.data.free ?? false, parsed.data.includeDisabled ?? false) });
+  res.json({ hosts: await listHosts(parsed.data.role, parsed.data.free ?? false, parsed.data.includeDisabled ?? false, parsed.data.search) });
 });
 
 router.post("/admin/hosts", requireSession, requireRole("admin"), async (req, res) => {

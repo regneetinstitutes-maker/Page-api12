@@ -1242,6 +1242,7 @@ export async function listHosts(
   role?: "omb" | "tournament",
   onlyFree = false,
   includeDisabled = false,
+  search?: string,
 ) {
   const hosts = await db
     .select({ host: hostsTable, username: usersTable.username })
@@ -1252,10 +1253,29 @@ export async function listHosts(
         role ? eq(hostsTable.role, role) : undefined,
         includeDisabled ? undefined : eq(hostsTable.status, "active"),
         onlyFree ? isNull(hostsTable.currentAssignmentId) : undefined,
+        search ? sql`${usersTable.name} ILIKE ${`%${search.trim()}%`}` : undefined,
       ),
     )
     .orderBy(asc(hostsTable.createdAt));
   return hosts.map(({ host, username }) => ({ ...host, username }));
+}
+
+export async function listCancelledCompetitions(type?: CompetitionType) {
+  const types: CompetitionType[] = type ? [type] : ["omb", "tournament"];
+  const competitions: Array<Record<string, unknown>> = [];
+  for (const competitionType of types) {
+    const table = competitionType === "omb" ? matchesTable : tournamentsTable;
+    const rows = await db
+      .select({ event: table, schedule: competitionSchedulesTable, mode: modesTable, game: gamesTable })
+      .from(table)
+      .innerJoin(competitionSchedulesTable, eq(competitionSchedulesTable.id, table.scheduleId))
+      .innerJoin(modesTable, eq(modesTable.id, competitionSchedulesTable.modeId))
+      .innerJoin(gamesTable, eq(gamesTable.id, modesTable.gameId))
+      .where(eq(table.status, "cancelled"))
+      .orderBy(desc(table.cancelledAt));
+    competitions.push(...rows.map((row) => ({ type: competitionType, ...row })));
+  }
+  return competitions;
 }
 
 export async function createGame(input: { name: string; logoUrl?: string | null }) {

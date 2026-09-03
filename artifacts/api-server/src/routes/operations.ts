@@ -1,12 +1,47 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
 import { requireRole, requireSession } from "../middlewares/requireSession";
-import { OperationsError, adjustUserWallet, broadcastAdminNotification, getAdminDashboard, listUserPayoutAccounts, resetUserPassword, searchCompetition, searchUsers, searchUserByMobile, updateUserAccountStatus } from "../lib/operations";
+import { OperationsError, adjustUserWallet, broadcastAdminNotification, createManager, deleteManager, getAdminDashboard, listManagers, listUserPayoutAccounts, resetManagerPassword, resetUserPassword, searchCompetition, searchUsers, searchUserByMobile, updateManager, updateUserAccountStatus } from "../lib/operations";
 
 const router: IRouter = Router();
 
 router.get("/operations/admin/dashboard", requireSession, requireRole("admin"), async (_req, res) => {
   res.json(await getAdminDashboard());
+});
+
+router.get("/admin/managers", requireSession, requireRole("admin"), async (_req, res) => {
+  res.json({ managers: await listManagers() });
+});
+
+router.post("/admin/managers", requireSession, requireRole("admin"), async (req, res) => {
+  const body = z.object({ username: z.string().trim().min(3).max(64).regex(/^[a-zA-Z0-9_.-]+$/), name: z.string().trim().min(1).max(128), mobileNumber: z.string().trim().min(5).max(32).optional(), password: z.string().min(8).max(256) }).safeParse(req.body);
+  if (!body.success) { res.status(400).json({ error: "A valid manager username, name, and password are required." }); return; }
+  try { res.status(201).json({ manager: await createManager(body.data) }); }
+  catch (error) { if (sendOperationsError(res, error)) return; throw error; }
+});
+
+router.patch("/admin/managers/:id", requireSession, requireRole("admin"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const body = z.object({ username: z.string().trim().min(3).max(64).regex(/^[a-zA-Z0-9_.-]+$/).optional(), name: z.string().trim().min(1).max(128).optional(), mobileNumber: z.string().trim().min(5).max(32).nullable().optional() }).safeParse(req.body);
+  if (!id.success || !body.success) { res.status(400).json({ error: "Invalid manager update." }); return; }
+  try { res.json({ manager: await updateManager(id.data, body.data) }); }
+  catch (error) { if (sendOperationsError(res, error)) return; throw error; }
+});
+
+router.delete("/admin/managers/:id", requireSession, requireRole("admin"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const permanent = z.coerce.boolean().catch(false).parse(req.query.permanent);
+  if (!id.success) { res.status(400).json({ error: "Invalid manager identifier." }); return; }
+  try { await deleteManager(id.data, permanent); res.json({ success: true, message: "Deleted successfully", id: id.data }); }
+  catch (error) { if (sendOperationsError(res, error)) return; throw error; }
+});
+
+router.post("/admin/managers/:id/password-reset", requireSession, requireRole("admin"), async (req, res) => {
+  const id = z.string().uuid().safeParse(req.params.id);
+  const body = z.object({ password: z.string().min(8).max(256) }).safeParse(req.body);
+  if (!id.success || !body.success) { res.status(400).json({ error: "A valid manager password is required." }); return; }
+  try { res.json({ manager: await resetManagerPassword(id.data, body.data.password) }); }
+  catch (error) { if (sendOperationsError(res, error)) return; throw error; }
 });
 
 function sendOperationsError(res: Parameters<IRouter["use"]>[1] extends never ? never : any, error: unknown) {
@@ -26,7 +61,7 @@ router.get("/operations/users/search", requireSession, requireRole("admin", "sup
   res.json(result);
 });
 
-router.get("/operations/competitions/search", requireSession, requireRole("admin", "support"), async (req, res) => {
+router.get("/operations/competitions/search", requireSession, requireRole("admin", "support", "manager"), async (req, res) => {
   const parsed = z.object({ q: z.string().trim().min(1).max(128).optional(), identifier: z.string().trim().min(1).max(128).optional() }).safeParse(req.query);
   if (!parsed.success) { res.status(400).json({ message: parsed.error.message }); return; }
   const result = await searchCompetition(parsed.data.q ?? parsed.data.identifier!);

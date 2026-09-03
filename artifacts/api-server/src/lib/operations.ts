@@ -158,11 +158,85 @@ export async function updateUserAccountStatus(userId: string, accountStatus: "ac
   return publicUser(updated);
 }
 
+export async function listManagers() {
+  const managers = await db.select().from(usersTable).where(eq(usersTable.role, "manager")).orderBy(asc(usersTable.createdAt));
+  return managers.map(publicUser);
+}
+
+export async function createManager(input: { username: string; name: string; mobileNumber?: string; password: string }) {
+  return db.transaction(async (tx) => {
+    const username = input.username.trim().toLowerCase();
+    const mobileNumber = input.mobileNumber?.trim() || null;
+    const [usernameConflict] = await tx.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.username, username)).limit(1);
+    if (usernameConflict) throw new OperationsError("USERNAME_EXISTS", "This username is already in use.", 409);
+    if (mobileNumber) {
+      const [mobileConflict] = await tx.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.mobileNumber, mobileNumber)).limit(1);
+      if (mobileConflict) throw new OperationsError("MOBILE_EXISTS", "This mobile number is already in use.", 409);
+    }
+    const [manager] = await tx.insert(usersTable).values({
+      username,
+      name: input.name.trim(),
+      age: 18,
+      passwordHash: await hashPassword(input.password),
+      passwordAlgo: PASSWORD_ALGO,
+      mobileNumber,
+      role: "manager",
+      mobileVerificationStatus: mobileNumber ? "verified" : "not_started",
+      mobileVerifiedAt: mobileNumber ? new Date() : null,
+    }).returning();
+    if (!manager) throw new OperationsError("MANAGER_CREATE_FAILED", "Unable to create manager.", 500);
+    return publicUser(manager);
+  });
+}
+
+export async function updateManager(id: string, input: { username?: string; name?: string; mobileNumber?: string | null }) {
+  return db.transaction(async (tx) => {
+    const [manager] = await tx.select().from(usersTable).where(and(eq(usersTable.id, id), eq(usersTable.role, "manager"))).for("update");
+    if (!manager) throw new OperationsError("MANAGER_NOT_FOUND", "Manager was not found.", 404);
+    const username = input.username?.trim().toLowerCase();
+    const mobileNumber = input.mobileNumber === undefined ? manager.mobileNumber : input.mobileNumber?.trim() || null;
+    if (username && username !== manager.username) {
+      const [conflict] = await tx.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.username, username)).limit(1);
+      if (conflict) throw new OperationsError("USERNAME_EXISTS", "This username is already in use.", 409);
+    }
+    if (mobileNumber && mobileNumber !== manager.mobileNumber) {
+      const [conflict] = await tx.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.mobileNumber, mobileNumber)).limit(1);
+      if (conflict) throw new OperationsError("MOBILE_EXISTS", "This mobile number is already in use.", 409);
+    }
+    const [updated] = await tx.update(usersTable).set({
+      username: username ?? manager.username,
+      name: input.name?.trim() ?? manager.name,
+      mobileNumber,
+    }).where(eq(usersTable.id, id)).returning();
+    return publicUser(updated);
+  });
+}
+
+export async function deleteManager(id: string, permanent = false) {
+  if (!permanent) return updateUserAccountStatus(id, "deactivated");
+  return db.transaction(async (tx) => {
+    const [manager] = await tx.select().from(usersTable).where(and(eq(usersTable.id, id), eq(usersTable.role, "manager"))).for("update");
+    if (!manager) throw new OperationsError("MANAGER_NOT_FOUND", "Manager was not found.", 404);
+    const [wallet] = await tx.select({ id: walletAccountsTable.id }).from(walletAccountsTable).where(eq(walletAccountsTable.userId, id)).limit(1);
+    const [deposit] = await tx.select({ id: depositsTable.id }).from(depositsTable).where(eq(depositsTable.userId, id)).limit(1);
+    const [withdrawal] = await tx.select({ id: withdrawalsTable.id }).from(withdrawalsTable).where(eq(withdrawalsTable.userId, id)).limit(1);
+    if (wallet || deposit || withdrawal) throw new OperationsError("MANAGER_HAS_HISTORY", "This manager has account or financial records and can only be deactivated.", 409);
+    await tx.delete(usersTable).where(eq(usersTable.id, id));
+    return { id };
+  });
+}
+
 export async function resetUserPassword(userId: string, password: string) {
   const passwordHash = await hashPassword(password);
   const [updated] = await db.update(usersTable).set({ passwordHash, passwordAlgo: PASSWORD_ALGO }).where(eq(usersTable.id, userId)).returning({ id: usersTable.id });
   if (!updated) throw new OperationsError("USER_NOT_FOUND", "User was not found.", 404);
   return updated;
+}
+
+export async function resetManagerPassword(userId: string, password: string) {
+  const [manager] = await db.select({ id: usersTable.id }).from(usersTable).where(and(eq(usersTable.id, userId), eq(usersTable.role, "manager"))).limit(1);
+  if (!manager) throw new OperationsError("MANAGER_NOT_FOUND", "Manager was not found.", 404);
+  return resetUserPassword(userId, password);
 }
 
 export async function searchCompetition(identifier: string) {
