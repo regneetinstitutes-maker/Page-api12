@@ -989,7 +989,7 @@ components:
     User:
       type: object
       description: A user account, excluding all credential/session material.
-      required: [id, username, name, age, accountStatus, createdAt, mobileVerificationStatus]
+      required: [id, username, name, age, accountStatus, role, createdAt, mobileVerificationStatus]
       properties:
         id:
           type: string
@@ -1011,6 +1011,9 @@ components:
         accountStatus:
           type: string
           enum: [active, suspended, deactivated]
+        role:
+          type: string
+          enum: [user, admin, manager, support, omb_host, tournament_host]
         createdAt:
           type: string
           format: date-time

@@ -17,6 +17,7 @@ function toUserResponse(user: User) {
     age: user.age,
     email: user.email ?? null,
     accountStatus: user.accountStatus,
+    role: user.role,
     createdAt: user.createdAt,
     mobileNumber: user.mobileNumber ?? null,
     mobileVerificationStatus: user.mobileVerificationStatus,

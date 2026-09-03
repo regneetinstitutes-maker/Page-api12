@@ -8,6 +8,8 @@
 import type { MobileVerificationStatus } from './mobileVerificationStatus';
 import type { UserAccountStatus } from './userAccountStatus';
 
+export type UserRole = 'user' | 'admin' | 'manager' | 'support' | 'omb_host' | 'tournament_host';
+
 /**
  * A user account, excluding all credential/session material.
  */
@@ -19,6 +21,7 @@ export interface User {
   /** Collected during the user's first deposit flow, not at signup. Null until the user provides it. Required before a deposit can be initiated. */
   email?: string | null;
   accountStatus: UserAccountStatus;
+  role: UserRole;
   createdAt: Date;
   /** The user's registered mobile number in E.164 format (+91XXXXXXXXXX). Null until submitted. Required and verified before a deposit or withdrawal can be initiated. */
   mobileNumber?: string | null;
